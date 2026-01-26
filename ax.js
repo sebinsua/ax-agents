@@ -20,6 +20,11 @@ import { fileURLToPath } from "node:url";
 import path from "node:path";
 import os from "node:os";
 
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const packageJson = JSON.parse(readFileSync(path.join(__dirname, "package.json"), "utf-8"));
+const VERSION = packageJson.version;
+
 /**
  * @typedef {'claude' | 'codex'} ToolName
  */
@@ -3447,7 +3452,7 @@ function printHelp(agent, cliName) {
   const backendName = agent.name === "codex" ? "OpenAI Codex" : "Claude";
   const hasReview = !!agent.reviewOptions;
 
-  console.log(`${name}.js - agentic assistant CLI (${backendName})
+  console.log(`${name} v${VERSION} - agentic assistant CLI (${backendName})
 
 Commands:
   agents                    List all running agents with state and log paths
@@ -3515,6 +3520,11 @@ async function main() {
 
   const args = process.argv.slice(2);
   const cliName = path.basename(process.argv[1], ".js");
+
+  if (args.includes("--version") || args.includes("-V")) {
+    console.log(VERSION);
+    process.exit(0);
+  }
 
   // Parse flags
   const wait = args.includes("--wait");
@@ -3650,7 +3660,6 @@ async function main() {
 
 // Run main() only when executed directly (not when imported for testing)
 // Use realpathSync to handle symlinks (e.g., axclaude, axcodex bin entries)
-const __filename = fileURLToPath(import.meta.url);
 const isDirectRun = process.argv[1] && (() => {
   try {
     return realpathSync(process.argv[1]) === __filename;
