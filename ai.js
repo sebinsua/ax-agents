@@ -365,6 +365,18 @@ function resolveSessionName(partial) {
   // Exact match
   if (agentSessions.includes(partial)) return partial;
 
+  // Daemon name match (e.g., "reviewer" matches "claude-daemon-reviewer-uuid")
+  const daemonMatches = agentSessions.filter((s) => {
+    const parsed = parseSessionName(s);
+    return parsed?.daemonName === partial;
+  });
+  if (daemonMatches.length === 1) return daemonMatches[0];
+  if (daemonMatches.length > 1) {
+    console.log("ERROR: ambiguous daemon name. Matches:");
+    for (const m of daemonMatches) console.log(`  ${m}`);
+    process.exit(1);
+  }
+
   // Prefix match
   const matches = agentSessions.filter((s) => s.startsWith(partial));
   if (matches.length === 1) return matches[0];
@@ -2085,7 +2097,7 @@ function ensureClaudeHookConfig() {
   }
 }
 
-function cmdKill(session) {
+function cmdKill(session, { all = false } = {}) {
   // If specific session provided, kill just that one
   if (session) {
     if (!tmuxHasSession(session)) {
@@ -2097,18 +2109,35 @@ function cmdKill(session) {
     return;
   }
 
-  // Default: kill all agent sessions
   const allSessions = tmuxListSessions();
   const agentSessions = allSessions.filter((s) => parseSessionName(s));
+
   if (agentSessions.length === 0) {
     console.log("No agents running");
     return;
   }
-  for (const s of agentSessions) {
+
+  // Filter to current project unless --all specified
+  let sessionsToKill = agentSessions;
+  if (!all) {
+    const currentProject = PROJECT_ROOT;
+    sessionsToKill = agentSessions.filter((s) => {
+      const cwd = getTmuxSessionCwd(s);
+      return cwd && cwd.startsWith(currentProject);
+    });
+
+    if (sessionsToKill.length === 0) {
+      console.log(`No agents running in ${currentProject}`);
+      console.log(`(Use --all to kill all ${agentSessions.length} agent(s) across all projects)`);
+      return;
+    }
+  }
+
+  for (const s of sessionsToKill) {
     tmuxKill(s);
     console.log(`Killed: ${s}`);
   }
-  console.log(`Killed ${agentSessions.length} agent(s)`);
+  console.log(`Killed ${sessionsToKill.length} agent(s)`);
 }
 
 function cmdAttach(session) {
@@ -2698,7 +2727,7 @@ Commands:
   mailbox                   View daemon observations (--limit=N, --branch=X, --all)
   daemons start [name]      Start daemon agents (all, or by name)
   daemons stop [name]       Stop daemon agents (all, or by name)
-  kill                      Kill all sessions (or --session=NAME for one)
+  kill                      Kill sessions in current project (--all for all, --session=NAME for one)
   status                    Check state (exit: 0=ready, 2=rate_limited, 3=confirming, 4=thinking)
   output [-N]               Show response (0=last, -1=prev, -2=older)
   debug                     Show raw screen output and detected state${hasReview ? `
@@ -2714,7 +2743,7 @@ Commands:
 
 Flags:
   --tool=NAME               Use specific agent (codex, claude)
-  --session=NAME            Use specific tmux session (self = current session)
+  --session=NAME            Target session by name, daemon name, or UUID prefix (self = current)
   --wait                    Wait for response (for review, approve, etc)
   --no-wait                 Don't wait (for messages, which wait by default)
   --timeout=N               Set timeout in seconds (default: 120)
@@ -2729,7 +2758,8 @@ Examples:
   ./${name}.js "please review the error handling"   # Auto custom review
   ./${name}.js review uncommitted --wait
   ./${name}.js approve --wait
-  ./${name}.js kill                       # Kill all agent sessions
+  ./${name}.js kill                       # Kill agents in current project
+  ./${name}.js kill --all                 # Kill all agents across all projects
   ./${name}.js kill --session=NAME        # Kill specific session
   ./${name}.js send "1[Enter]"            # Recovery: select option 1 and press Enter
   ./${name}.js send "[Escape][Escape]"    # Recovery: escape out of a dialog
@@ -2785,7 +2815,8 @@ async function main() {
       }
       session = current;
     } else {
-      session = val;
+      // Resolve partial names, daemon names, and UUID prefixes
+      session = resolveSessionName(val);
     }
   }
 
@@ -2842,7 +2873,7 @@ async function main() {
   if (cmd === "agents") return cmdAgents();
   if (cmd === "daemons") return cmdDaemons(filteredArgs[1], filteredArgs[2]);
   if (cmd === "daemon") return cmdDaemon(filteredArgs[1]);
-  if (cmd === "kill") return cmdKill(session);
+  if (cmd === "kill") return cmdKill(session, { all });
   if (cmd === "attach") return cmdAttach(session);
   if (cmd === "log") return cmdLog(filteredArgs[1], { tail, reasoning, follow });
   if (cmd === "mailbox") return cmdMailbox({ limit, branch, all });
