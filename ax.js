@@ -1540,7 +1540,7 @@ class Agent {
     }
 
     const cwd = process.cwd();
-    const childPattern = new RegExp(`^${this.name}-[0-9a-f-]{36}$`, "i");
+    const childPattern = new RegExp(`^${this.name}-(partner-)?[0-9a-f-]{36}$`, "i");
 
     // If inside tmux, look for existing agent session in same cwd
     const current = tmuxCurrentSession();
