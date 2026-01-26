@@ -1,3 +1,6 @@
 # AI assistant configuration
 .ai/
 .claude/
+
+# Dependencies
+node_modules/
