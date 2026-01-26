@@ -25,11 +25,11 @@ describe("parseSessionName", () => {
     });
   });
 
-  it("parses daemon session with name and uuid", () => {
-    const result = parseSessionName("claude-daemon-myagent-12345678-1234-1234-1234-123456789abc");
+  it("parses archangel session with name and uuid", () => {
+    const result = parseSessionName("claude-archangel-myagent-12345678-1234-1234-1234-123456789abc");
     assert.deepStrictEqual(result, {
       tool: "claude",
-      daemonName: "myagent",
+      archangelName: "myagent",
       uuid: "12345678-1234-1234-1234-123456789abc",
     });
   });

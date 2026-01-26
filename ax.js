@@ -32,12 +32,12 @@ const VERSION = packageJson.version;
 /**
  * @typedef {Object} ParsedSession
  * @property {string} tool
- * @property {string} [daemonName]
+ * @property {string} [archangelName]
  * @property {string} [uuid]
  */
 
 /**
- * @typedef {Object} DaemonConfig
+ * @typedef {Object} ArchangelConfig
  * @property {string} name
  * @property {ToolName} tool
  * @property {string[]} watch
@@ -264,9 +264,9 @@ const POLL_MS = parseInt(process.env.AX_POLL_MS || "200", 10);
 const DEFAULT_TIMEOUT_MS = parseInt(process.env.AX_TIMEOUT_MS || "120000", 10);
 const REVIEW_TIMEOUT_MS = parseInt(process.env.AX_REVIEW_TIMEOUT_MS || "900000", 10); // 15 minutes
 const STARTUP_TIMEOUT_MS = parseInt(process.env.AX_STARTUP_TIMEOUT_MS || "30000", 10);
-const DAEMON_STARTUP_TIMEOUT_MS = parseInt(process.env.AX_DAEMON_STARTUP_TIMEOUT_MS || "60000", 10);
-const DAEMON_RESPONSE_TIMEOUT_MS = parseInt(process.env.AX_DAEMON_RESPONSE_TIMEOUT_MS || "300000", 10); // 5 minutes
-const DAEMON_HEALTH_CHECK_MS = parseInt(process.env.AX_DAEMON_HEALTH_CHECK_MS || "30000", 10);
+const ARCHANGEL_STARTUP_TIMEOUT_MS = parseInt(process.env.AX_ARCHANGEL_STARTUP_TIMEOUT_MS || "60000", 10);
+const ARCHANGEL_RESPONSE_TIMEOUT_MS = parseInt(process.env.AX_ARCHANGEL_RESPONSE_TIMEOUT_MS || "300000", 10); // 5 minutes
+const ARCHANGEL_HEALTH_CHECK_MS = parseInt(process.env.AX_ARCHANGEL_HEALTH_CHECK_MS || "30000", 10);
 const STABLE_MS = parseInt(process.env.AX_STABLE_MS || "1000", 10);
 const APPROVE_DELAY_MS = parseInt(process.env.AX_APPROVE_DELAY_MS || "100", 10);
 const MAILBOX_MAX_AGE_MS = parseInt(process.env.AX_MAILBOX_MAX_AGE_MS || "3600000", 10); // 1 hour
@@ -274,9 +274,9 @@ const CLAUDE_CONFIG_DIR = process.env.AX_CLAUDE_CONFIG_DIR || path.join(os.homed
 const CODEX_CONFIG_DIR = process.env.AX_CODEX_CONFIG_DIR || path.join(os.homedir(), ".codex");
 const TRUNCATE_USER_LEN = 500;
 const TRUNCATE_THINKING_LEN = 300;
-const DAEMON_GIT_CONTEXT_HOURS = 4;
-const DAEMON_GIT_CONTEXT_MAX_LINES = 200;
-const DAEMON_PARENT_CONTEXT_ENTRIES = 10;
+const ARCHANGEL_GIT_CONTEXT_HOURS = 4;
+const ARCHANGEL_GIT_CONTEXT_MAX_LINES = 200;
+const ARCHANGEL_PARENT_CONTEXT_ENTRIES = 10;
 
 /**
  * @param {string} session
@@ -359,10 +359,10 @@ function parseSessionName(session) {
   const tool = match[1].toLowerCase();
   const rest = match[2];
 
-  // Daemon: {tool}-daemon-{name}-{uuid}
-  const daemonMatch = rest.match(/^daemon-(.+)-([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i);
-  if (daemonMatch) {
-    return { tool, daemonName: daemonMatch[1], uuid: daemonMatch[2] };
+  // Archangel: {tool}-archangel-{name}-{uuid}
+  const archangelMatch = rest.match(/^archangel-(.+)-([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i);
+  if (archangelMatch) {
+    return { tool, archangelName: archangelMatch[1], uuid: archangelMatch[2] };
   }
 
   // Partner: {tool}-partner-{uuid}
@@ -567,15 +567,15 @@ function resolveSessionName(partial) {
   // Exact match
   if (agentSessions.includes(partial)) return partial;
 
-  // Daemon name match (e.g., "reviewer" matches "claude-daemon-reviewer-uuid")
-  const daemonMatches = agentSessions.filter((s) => {
+  // Archangel name match (e.g., "reviewer" matches "claude-archangel-reviewer-uuid")
+  const archangelMatches = agentSessions.filter((s) => {
     const parsed = parseSessionName(s);
-    return parsed?.daemonName === partial;
+    return parsed?.archangelName === partial;
   });
-  if (daemonMatches.length === 1) return daemonMatches[0];
-  if (daemonMatches.length > 1) {
-    console.log("ERROR: ambiguous daemon name. Matches:");
-    for (const m of daemonMatches) console.log(`  ${m}`);
+  if (archangelMatches.length === 1) return archangelMatches[0];
+  if (archangelMatches.length > 1) {
+    console.log("ERROR: ambiguous archangel name. Matches:");
+    for (const m of archangelMatches) console.log(`  ${m}`);
     process.exit(1);
   }
 
@@ -604,18 +604,18 @@ function resolveSessionName(partial) {
 }
 
 // =============================================================================
-// Helpers - daemon agents
+// Helpers - archangels
 // =============================================================================
 
 /**
- * @returns {DaemonConfig[]}
+ * @returns {ArchangelConfig[]}
  */
 function loadAgentConfigs() {
   const agentsDir = AGENTS_DIR;
   if (!existsSync(agentsDir)) return [];
 
   const files = readdirSync(agentsDir).filter((f) => f.endsWith(".md"));
-  /** @type {DaemonConfig[]} */
+  /** @type {ArchangelConfig[]} */
   const configs = [];
 
   for (const file of files) {
@@ -638,7 +638,7 @@ function loadAgentConfigs() {
 /**
  * @param {string} filename
  * @param {string} content
- * @returns {DaemonConfig | {error: string} | null}
+ * @returns {ArchangelConfig | {error: string} | null}
  */
 function parseAgentConfig(filename, content) {
   const name = filename.replace(/\.md$/, "");
@@ -723,11 +723,11 @@ function parseAgentConfig(filename, content) {
 }
 
 /**
- * @param {DaemonConfig} config
+ * @param {ArchangelConfig} config
  * @returns {string}
  */
-function getDaemonSessionPattern(config) {
-  return `${config.tool}-daemon-${config.name}`;
+function getArchangelSessionPattern(config) {
+  return `${config.tool}-archangel-${config.name}`;
 }
 
 // =============================================================================
@@ -950,9 +950,9 @@ function buildGitContext(hoursAgo = 4, maxLinesPerSection = 200) {
 // Helpers - parent session context
 // =============================================================================
 
-// Environment variables used to pass parent session info to daemons
-const AX_DAEMON_PARENT_SESSION_ENV = "AX_DAEMON_PARENT_SESSION";
-const AX_DAEMON_PARENT_UUID_ENV = "AX_DAEMON_PARENT_UUID";
+// Environment variables used to pass parent session info to archangels
+const AX_ARCHANGEL_PARENT_SESSION_ENV = "AX_ARCHANGEL_PARENT_SESSION";
+const AX_ARCHANGEL_PARENT_UUID_ENV = "AX_ARCHANGEL_PARENT_UUID";
 
 /**
  * @returns {ParentSession | null}
@@ -962,7 +962,7 @@ function findCurrentClaudeSession() {
   const current = tmuxCurrentSession();
   if (current) {
     const parsed = parseSessionName(current);
-    if (parsed?.tool === "claude" && !parsed.daemonName && parsed.uuid) {
+    if (parsed?.tool === "claude" && !parsed.archangelName && parsed.uuid) {
       return { session: current, uuid: parsed.uuid };
     }
   }
@@ -979,7 +979,7 @@ function findCurrentClaudeSession() {
   for (const session of sessions) {
     const parsed = parseSessionName(session);
     if (!parsed || parsed.tool !== "claude") continue;
-    if (parsed.daemonName) continue;
+    if (parsed.archangelName) continue;
     if (!parsed.uuid) continue;
 
     const sessionCwd = getTmuxSessionCwd(session);
@@ -1035,15 +1035,15 @@ function findCurrentClaudeSession() {
  * @returns {ParentSession | null}
  */
 function findParentSession() {
-  // First check if parent session was passed via environment (for daemons)
-  const envUuid = process.env[AX_DAEMON_PARENT_UUID_ENV];
+  // First check if parent session was passed via environment (for archangels)
+  const envUuid = process.env[AX_ARCHANGEL_PARENT_UUID_ENV];
   if (envUuid) {
     // Session name is optional (may be null for non-tmux sessions)
-    const envSession = process.env[AX_DAEMON_PARENT_SESSION_ENV] || null;
+    const envSession = process.env[AX_ARCHANGEL_PARENT_SESSION_ENV] || null;
     return { session: envSession, uuid: envUuid };
   }
 
-  // Fallback to detecting current session (shouldn't be needed for daemons)
+  // Fallback to detecting current session (shouldn't be needed for archangels)
   return findCurrentClaudeSession();
 }
 
@@ -2045,7 +2045,7 @@ function cmdAgents() {
     const screen = tmuxCapture(session);
     const state = agent.getState(screen);
     const logPath = agent.findLogPath(session);
-    const type = parsed.daemonName ? "daemon" : "-";
+    const type = parsed.archangelName ? "archangel" : "-";
 
     return {
       session,
@@ -2073,87 +2073,84 @@ function cmdAgents() {
 }
 
 // =============================================================================
-// Command: daemons
+// Command: summon/recall
 // =============================================================================
 
 /**
  * @param {string} pattern
  * @returns {string | undefined}
  */
-function findDaemonSession(pattern) {
+function findArchangelSession(pattern) {
   const sessions = tmuxListSessions();
   return sessions.find((s) => s.startsWith(pattern));
 }
 
 /**
- * @param {DaemonConfig} config
+ * @param {ArchangelConfig} config
  * @returns {string}
  */
-function generateDaemonSessionName(config) {
-  return `${config.tool}-daemon-${config.name}-${randomUUID()}`;
+function generateArchangelSessionName(config) {
+  return `${config.tool}-archangel-${config.name}-${randomUUID()}`;
 }
 
 /**
- * @param {DaemonConfig} config
+ * @param {ArchangelConfig} config
  * @param {ParentSession | null} [parentSession]
  */
-function startDaemonAgent(config, parentSession = null) {
-  // Build environment with parent session info if available
+function startArchangel(config, parentSession = null) {
   /** @type {NodeJS.ProcessEnv} */
   const env = { ...process.env };
   if (parentSession?.uuid) {
-    // Session name may be null for non-tmux sessions, but uuid is required
     if (parentSession.session) {
-      env[AX_DAEMON_PARENT_SESSION_ENV] = parentSession.session;
+      env[AX_ARCHANGEL_PARENT_SESSION_ENV] = parentSession.session;
     }
-    env[AX_DAEMON_PARENT_UUID_ENV] = parentSession.uuid;
+    env[AX_ARCHANGEL_PARENT_UUID_ENV] = parentSession.uuid;
   }
 
-  // Spawn ax.js daemon <name> as a detached background process
-  const child = spawn("node", [process.argv[1], "daemon", config.name], {
+  const child = spawn("node", [process.argv[1], "archangel", config.name], {
     detached: true,
     stdio: "ignore",
     cwd: process.cwd(),
     env,
   });
   child.unref();
-  console.log(`Starting daemon: ${config.name} (pid ${child.pid})${parentSession ? ` [parent: ${parentSession.session}]` : ""}`);
+  console.log(`Summoning: ${config.name} (pid ${child.pid})${parentSession ? ` [parent: ${parentSession.session}]` : ""}`);
 }
 
 // =============================================================================
-// Command: daemon (runs as the daemon process itself)
+// Command: archangel (runs as the archangel process itself)
 // =============================================================================
 
 /**
  * @param {string | undefined} agentName
  */
-async function cmdDaemon(agentName) {
+async function cmdArchangel(agentName) {
   if (!agentName) {
-    console.error("Usage: ./ax.js daemon <name>");
+    console.error("Usage: ./ax.js archangel <name>");
     process.exit(1);
   }
   // Load agent config
   const configPath = path.join(AGENTS_DIR, `${agentName}.md`);
   if (!existsSync(configPath)) {
-    console.error(`[daemon:${agentName}] Config not found: ${configPath}`);
+    console.error(`[archangel:${agentName}] Config not found: ${configPath}`);
     process.exit(1);
   }
 
   const content = readFileSync(configPath, "utf-8");
   const configResult = parseAgentConfig(`${agentName}.md`, content);
   if (!configResult || "error" in configResult) {
-    console.error(`[daemon:${agentName}] Invalid config`);
+    console.error(`[archangel:${agentName}] Invalid config`);
     process.exit(1);
   }
   const config = configResult;
 
   const agent = config.tool === "claude" ? ClaudeAgent : CodexAgent;
-  const sessionName = generateDaemonSessionName(config);
+  const sessionName = generateArchangelSessionName(config);
 
   // Check agent CLI is installed before trying to start
   const cliCheck = spawnSync("which", [agent.name], { encoding: "utf-8" });
   if (cliCheck.status !== 0) {
-    console.error(`[daemon:${agentName}] ERROR: ${agent.name} CLI is not installed or not in PATH`);
+    console.error(`[archangel:${agentName}] ERROR: ${agent.name} CLI is not installed or not in PATH`);
     process.exit(1);
   }
 
@@ -2163,7 +2160,7 @@ async function cmdDaemon(agentName) {
 
   // Wait for agent to be ready
   const start = Date.now();
-  while (Date.now() - start < DAEMON_STARTUP_TIMEOUT_MS) {
+  while (Date.now() - start < ARCHANGEL_STARTUP_TIMEOUT_MS) {
     const screen = tmuxCapture(sessionName);
     const state = agent.getState(screen);
 
@@ -2174,7 +2171,7 @@ async function cmdDaemon(agentName) {
 
     // Handle bypass permissions confirmation dialog (Claude Code shows this for --dangerously-skip-permissions)
     if (screen.includes("Bypass Permissions mode") && screen.includes("Yes, I accept")) {
-      console.log(`[daemon:${agentName}] Accepting bypass permissions dialog`);
+      console.log(`[archangel:${agentName}] Accepting bypass permissions dialog`);
       tmuxSend(sessionName, "2"); // Select "Yes, I accept"
       await sleep(300);
       tmuxSend(sessionName, "Enter");
@@ -2183,7 +2180,7 @@ async function cmdDaemon(agentName) {
     }
 
     if (state === State.READY) {
-      console.log(`[daemon:${agentName}] Started session: ${sessionName}`);
+      console.log(`[archangel:${agentName}] Started session: ${sessionName}`);
       break;
     }
 
@@ -2258,7 +2255,7 @@ async function cmdDaemon(agentName) {
 
         prompt += "\n\n## Files Changed\n  - " + files.slice(0, 10).join("\n  - ");
 
-        const gitContext = buildGitContext(DAEMON_GIT_CONTEXT_HOURS, DAEMON_GIT_CONTEXT_MAX_LINES);
+        const gitContext = buildGitContext(ARCHANGEL_GIT_CONTEXT_HOURS, ARCHANGEL_GIT_CONTEXT_MAX_LINES);
         if (gitContext) {
           prompt += "\n\n## Git Context\n\n" + gitContext;
         }
@@ -2266,8 +2263,8 @@ async function cmdDaemon(agentName) {
         prompt += '\n\nReview these changes in the context of what the user is working on. Report any issues found. Keep your response concise.\nIf there are no significant issues, respond with just "No issues found."';
       } else {
         // Fallback: no JSONL context available, use conversation + git context
-        const parentContext = getParentSessionContext(DAEMON_PARENT_CONTEXT_ENTRIES);
-        const gitContext = buildGitContext(DAEMON_GIT_CONTEXT_HOURS, DAEMON_GIT_CONTEXT_MAX_LINES);
+        const parentContext = getParentSessionContext(ARCHANGEL_PARENT_CONTEXT_ENTRIES);
+        const gitContext = buildGitContext(ARCHANGEL_GIT_CONTEXT_HOURS, ARCHANGEL_GIT_CONTEXT_MAX_LINES);
 
         if (parentContext) {
           prompt += "\n\n## Main Session Context\n\nThe user is currently working on:\n\n" + parentContext;
@@ -2285,7 +2282,7 @@ async function cmdDaemon(agentName) {
 
       // Check session still exists
       if (!tmuxHasSession(sessionName)) {
-        console.log(`[daemon:${agentName}] Session gone, exiting`);
+        console.log(`[archangel:${agentName}] Session gone, exiting`);
         process.exit(0);
       }
 
@@ -2294,12 +2291,12 @@ async function cmdDaemon(agentName) {
       const state = agent.getState(screen);
 
       if (state === State.RATE_LIMITED) {
-        console.error(`[daemon:${agentName}] Rate limited - stopping`);
+        console.error(`[archangel:${agentName}] Rate limited - stopping`);
         process.exit(2);
       }
 
       if (state !== State.READY) {
-        console.log(`[daemon:${agentName}] Agent not ready (${state}), skipping`);
+        console.log(`[archangel:${agentName}] Agent not ready (${state}), skipping`);
         isProcessing = false;
         return;
       }
@@ -2311,10 +2308,10 @@ async function cmdDaemon(agentName) {
       await sleep(100); // Ensure Enter is processed
 
       // Wait for response
-      const { state: endState, screen: afterScreen } = await waitForResponse(agent, sessionName, DAEMON_RESPONSE_TIMEOUT_MS);
+      const { state: endState, screen: afterScreen } = await waitForResponse(agent, sessionName, ARCHANGEL_RESPONSE_TIMEOUT_MS);
 
       if (endState === State.RATE_LIMITED) {
-        console.error(`[daemon:${agentName}] Rate limited - stopping`);
+        console.error(`[archangel:${agentName}] Rate limited - stopping`);
         process.exit(2);
       }
 
@@ -2335,12 +2332,12 @@ async function cmdDaemon(agentName) {
           files,
           message: cleanedResponse.slice(0, 1000),
         });
-        console.log(`[daemon:${agentName}] Wrote observation for ${files.length} file(s)`);
+        console.log(`[archangel:${agentName}] Wrote observation for ${files.length} file(s)`);
       } else if (isGarbage) {
-        console.log(`[daemon:${agentName}] Skipped garbage response`);
+        console.log(`[archangel:${agentName}] Skipped garbage response`);
       }
     } catch (err) {
-      console.error(`[daemon:${agentName}] Error:`, err instanceof Error ? err.message : err);
+      console.error(`[archangel:${agentName}] Error:`, err instanceof Error ? err.message : err);
     }
 
     isProcessing = false;
@@ -2348,7 +2345,7 @@ async function cmdDaemon(agentName) {
 
   function scheduleProcessChanges() {
     processChanges().catch((err) => {
-      console.error(`[daemon:${agentName}] Unhandled error:`, err instanceof Error ? err.message : err);
+      console.error(`[archangel:${agentName}] Unhandled error:`, err instanceof Error ? err.message : err);
     });
   }
 
@@ -2369,16 +2366,16 @@ async function cmdDaemon(agentName) {
   // Check if session still exists periodically
   const sessionCheck = setInterval(() => {
     if (!tmuxHasSession(sessionName)) {
-      console.log(`[daemon:${agentName}] Session gone, exiting`);
+      console.log(`[archangel:${agentName}] Session gone, exiting`);
       stopWatching();
       clearInterval(sessionCheck);
       process.exit(0);
     }
-  }, DAEMON_HEALTH_CHECK_MS);
+  }, ARCHANGEL_HEALTH_CHECK_MS);
 
   // Handle graceful shutdown
   process.on("SIGTERM", () => {
-    console.log(`[daemon:${agentName}] Received SIGTERM, shutting down`);
+    console.log(`[archangel:${agentName}] Received SIGTERM, shutting down`);
     stopWatching();
     clearInterval(sessionCheck);
     tmuxSend(sessionName, "C-c");
@@ -2389,7 +2386,7 @@ async function cmdDaemon(agentName) {
   });
 
   process.on("SIGINT", () => {
-    console.log(`[daemon:${agentName}] Received SIGINT, shutting down`);
+    console.log(`[archangel:${agentName}] Received SIGINT, shutting down`);
     stopWatching();
     clearInterval(sessionCheck);
     tmuxSend(sessionName, "C-c");
@@ -2399,48 +2396,33 @@ async function cmdDaemon(agentName) {
     }, 500);
   });
 
-  console.log(`[daemon:${agentName}] Watching: ${config.watch.join(", ")}`);
+  console.log(`[archangel:${agentName}] Watching: ${config.watch.join(", ")}`);
 
   // Keep the process alive
   await new Promise(() => {});
 }
 
 /**
- * @param {string} action
- * @param {string | null} [daemonName]
+ * @param {string | null} [name]
  */
-async function cmdDaemons(action, daemonName = null) {
-  if (action !== "start" && action !== "stop" && action !== "init") {
-    console.log("Usage: ./ax.js daemons <start|stop|init> [name]");
-    process.exit(1);
-  }
+async function cmdSummon(name = null) {
+  const configs = loadAgentConfigs();
 
-  // Handle init action separately
-  if (action === "init") {
-    if (!daemonName) {
-      console.log("Usage: ./ax.js daemons init <name>");
-      console.log("Example: ./ax.js daemons init reviewer");
-      process.exit(1);
-    }
+  // If name provided but doesn't exist, create it
+  if (name) {
+    const exists = configs.some((c) => c.name === name);
+    if (!exists) {
+      if (!/^[a-zA-Z0-9_-]+$/.test(name)) {
+        console.log("ERROR: Name must contain only letters, numbers, dashes, and underscores");
+        process.exit(1);
+      }
 
-    // Validate name (alphanumeric, dashes, underscores only)
-    if (!/^[a-zA-Z0-9_-]+$/.test(daemonName)) {
-      console.log("ERROR: Daemon name must contain only letters, numbers, dashes, and underscores");
-      process.exit(1);
-    }
+      if (!existsSync(AGENTS_DIR)) {
+        mkdirSync(AGENTS_DIR, { recursive: true });
+      }
 
-    const agentPath = path.join(AGENTS_DIR, `${daemonName}.md`);
-    if (existsSync(agentPath)) {
-      console.log(`ERROR: Agent config already exists: ${agentPath}`);
-      process.exit(1);
-    }
-
-    // Create agents directory if needed
-    if (!existsSync(AGENTS_DIR)) {
-      mkdirSync(AGENTS_DIR, { recursive: true });
-    }
-
-    const template = `---
+      const agentPath = path.join(AGENTS_DIR, `${name}.md`);
+      const template = `---
 tool: claude
 watch: ["**/*.{ts,tsx,js,jsx,mjs,mts}"]
 interval: 30
@@ -2448,70 +2430,71 @@ interval: 30
 
 Review changed files for bugs, type errors, and edge cases.
 `;
-
-    writeFileSync(agentPath, template);
-    console.log(`Created agent config: ${agentPath}`);
-    console.log(`Edit the file to customize the daemon, then run: ./ax.js daemons start ${daemonName}`);
-    return;
+      writeFileSync(agentPath, template);
+      console.log(`Created: ${agentPath}`);
+      console.log(`Edit the file to customize, then run: ax summon ${name}`);
+      return;
+    }
   }
-
-  const configs = loadAgentConfigs();
 
   if (configs.length === 0) {
-    console.log(`No agent configs found in ${AGENTS_DIR}/`);
+    console.log(`No archangels found in ${AGENTS_DIR}/`);
     return;
   }
 
-  // Filter to specific daemon if name provided
-  const targetConfigs = daemonName
-    ? configs.filter((c) => c.name === daemonName)
-    : configs;
+  const targetConfigs = name ? configs.filter((c) => c.name === name) : configs;
 
-  if (daemonName && targetConfigs.length === 0) {
-    console.log(`ERROR: daemon '${daemonName}' not found in ${AGENTS_DIR}/`);
-    process.exit(1);
-  }
+  ensureMailboxHookScript();
 
-  // Ensure hook script exists on start
-  if (action === "start") {
-    ensureMailboxHookScript();
-  }
-
-  // Find current Claude session to pass as parent (if we're inside one)
-  const parentSession = action === "start" ? findCurrentClaudeSession() : null;
-  if (action === "start") {
-    if (parentSession) {
-      console.log(`Parent session: ${parentSession.session || "(non-tmux)"} [${parentSession.uuid}]`);
-    } else {
-      console.log("Parent session: null (not running from Claude or no active sessions)");
-    }
+  const parentSession = findCurrentClaudeSession();
+  if (parentSession) {
+    console.log(`Parent session: ${parentSession.session || "(non-tmux)"} [${parentSession.uuid}]`);
   }
 
   for (const config of targetConfigs) {
-    const sessionPattern = getDaemonSessionPattern(config);
-    const existing = findDaemonSession(sessionPattern);
+    const sessionPattern = getArchangelSessionPattern(config);
+    const existing = findArchangelSession(sessionPattern);
 
-    if (action === "stop") {
-      if (existing) {
-        tmuxSend(existing, "C-c");
-        await sleep(300);
-        tmuxKill(existing);
-        console.log(`Stopped daemon: ${config.name} (${existing})`);
-      } else {
-        console.log(`Daemon not running: ${config.name}`);
-      }
-    } else if (action === "start") {
-      if (!existing) {
-        startDaemonAgent(config, parentSession);
-      } else {
-        console.log(`Daemon already running: ${config.name} (${existing})`);
-      }
+    if (!existing) {
+      startArchangel(config, parentSession);
+    } else {
+      console.log(`Already running: ${config.name} (${existing})`);
     }
   }
 
-  // GC mailbox on start
-  if (action === "start") {
-    gcMailbox(24);
+  gcMailbox(24);
+}
+
+/**
+ * @param {string | null} [name]
+ */
+async function cmdRecall(name = null) {
+  const configs = loadAgentConfigs();
+
+  if (configs.length === 0) {
+    console.log(`No archangels found in ${AGENTS_DIR}/`);
+    return;
+  }
+
+  const targetConfigs = name ? configs.filter((c) => c.name === name) : configs;
+
+  if (name && targetConfigs.length === 0) {
+    console.log(`ERROR: archangel '${name}' not found in ${AGENTS_DIR}/`);
+    process.exit(1);
+  }
+
+  for (const config of targetConfigs) {
+    const sessionPattern = getArchangelSessionPattern(config);
+    const existing = findArchangelSession(sessionPattern);
+
+    if (existing) {
+      tmuxSend(existing, "C-c");
+      await sleep(300);
+      tmuxKill(existing);
+      console.log(`Recalled: ${config.name} (${existing})`);
+    } else {
+      console.log(`Not running: ${config.name}`);
+    }
   }
 }
 
@@ -3446,9 +3429,9 @@ Commands:
   agents                    List all running agents with state and log paths
   attach [SESSION]          Attach to agent session interactively
   log SESSION               View conversation log (--tail=N, --follow, --reasoning)
-  mailbox                   View daemon observations (--limit=N, --branch=X, --all)
-  daemons start [name]      Start daemon agents (all, or by name)
-  daemons stop [name]       Stop daemon agents (all, or by name)
+  mailbox                   View archangel observations (--limit=N, --branch=X, --all)
+  summon [name]             Summon archangels (all, or by name)
+  recall [name]             Recall archangels (all, or by name)
   kill                      Kill sessions in current project (--all for all, --session=NAME for one)
   status                    Check state (exit: 0=ready, 2=rate_limited, 3=confirming, 4=thinking)
   output [-N]               Show response (0=last, -1=prev, -2=older)
@@ -3464,7 +3447,7 @@ Commands:
 
 Flags:
   --tool=NAME               Use specific agent (codex, claude)
-  --session=NAME            Target session by name, daemon name, or UUID prefix (self = current)
+  --session=NAME            Target session by name, archangel name, or UUID prefix (self = current)
   --wait                    Wait for response (for review, approve, etc)
   --no-wait                 Don't wait (for messages, which wait by default)
   --timeout=N               Set timeout in seconds (default: 120)
@@ -3490,11 +3473,12 @@ Examples:
   ./${name}.js send "1[Enter]"            # Recovery: select option 1 and press Enter
   ./${name}.js send "[Escape][Escape]"    # Recovery: escape out of a dialog
 
-Daemon Agents:
-  ./${name}.js daemons start              # Start all daemons from .ai/agents/*.md
-  ./${name}.js daemons stop               # Stop all daemons
-  ./${name}.js daemons init <name>        # Create new daemon config
-  ./${name}.js agents                     # List all agents (shows TYPE=daemon)`);
+Archangels:
+  ./${name}.js summon                     # Summon all archangels from .ai/agents/*.md
+  ./${name}.js summon reviewer            # Summon by name (creates config if new)
+  ./${name}.js recall                     # Recall all archangels
+  ./${name}.js recall reviewer            # Recall one by name
+  ./${name}.js agents                     # List all agents (shows TYPE=archangel)`);
 }
 
 async function main() {
@@ -3548,7 +3532,7 @@ async function main() {
       }
       session = current;
     } else {
-      // Resolve partial names, daemon names, and UUID prefixes
+      // Resolve partial names, archangel names, and UUID prefixes
       session = resolveSessionName(val);
     }
   }
@@ -3604,8 +3588,9 @@ async function main() {
 
   // Dispatch commands
   if (cmd === "agents") return cmdAgents();
-  if (cmd === "daemons") return cmdDaemons(filteredArgs[1], filteredArgs[2]);
-  if (cmd === "daemon") return cmdDaemon(filteredArgs[1]);
+  if (cmd === "summon") return cmdSummon(filteredArgs[1]);
+  if (cmd === "recall") return cmdRecall(filteredArgs[1]);
+  if (cmd === "archangel") return cmdArchangel(filteredArgs[1]);
   if (cmd === "kill") return cmdKill(session, { all });
   if (cmd === "attach") return cmdAttach(filteredArgs[1] || session);
   if (cmd === "log") return cmdLog(filteredArgs[1] || session, { tail, reasoning, follow });

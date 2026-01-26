@@ -1,6 +1,12 @@
 # ax-agents
 
-A CLI for orchestrating AI coding agents via `tmux`.
+<p align="center">
+  <img src="assets/luca-giordano-the-fall-of-the-rebel-angels.jpg" alt="The Fall of the Rebel Angels by Luca Giordano" width="250">
+  <br><br>
+  <strong>A CLI for orchestrating AI coding agents via `tmux`.</strong>
+</p>
+
+Running agents in `tmux` sessions makes it easy to monitor multiple agents, review their work, and interact with them when needed.
 
 ## Install
 
@@ -19,9 +25,20 @@ ax --yolo "fix the login bug"
 
 Run `ax --help` for all options.
 
-## Why
+## Archangels
 
-Running AI agents in tmux sessions makes it easy to monitor multiple agents, review their work, and interact with them when needed. This tool handles the session management so you can focus on the prompts.
+Archangels are background agents that watch your codebase and surface observations to your main coding session.
+
+Configure them in `.ai/agents/*.md`, then:
+
+```
+ax summon              # summon all archangels
+ax summon reviewer     # summon one by name
+ax recall              # recall all
+ax recall reviewer     # recall one
+```
+
+When you next prompt Claude, any observations from your archangels will be injected automatically.
 
 ## License
 
