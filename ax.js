@@ -2516,7 +2516,7 @@ Review changed files for bugs, type errors, and edge cases.
 }
 
 // Version of the hook script template - bump when making changes
-const HOOK_SCRIPT_VERSION = "2";
+const HOOK_SCRIPT_VERSION = "3";
 
 function ensureMailboxHookScript() {
   const hooksDir = HOOKS_DIR;
@@ -2534,26 +2534,21 @@ function ensureMailboxHookScript() {
     mkdirSync(hooksDir, { recursive: true });
   }
 
-  // Inject absolute paths into the generated script
-  const mailboxPath = path.join(AI_DIR, "mailbox.jsonl");
-  const lastSeenPath = path.join(AI_DIR, "mailbox-last-seen");
-
   const hookCode = `#!/usr/bin/env node
 ${versionMarker}
-// Auto-generated hook script - do not edit manually
-
 import { readFileSync, writeFileSync, existsSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const AI_DIR = join(__dirname, "..");
 const DEBUG = process.env.AX_DEBUG === "1";
-const MAILBOX = "${mailboxPath}";
-const LAST_SEEN = "${lastSeenPath}";
-const MAX_AGE_MS = 60 * 60 * 1000; // 1 hour (matches MAILBOX_MAX_AGE_MS)
+const MAILBOX = join(AI_DIR, "mailbox.jsonl");
+const LAST_SEEN = join(AI_DIR, "mailbox-last-seen");
+const MAX_AGE_MS = 60 * 60 * 1000;
 
 if (!existsSync(MAILBOX)) process.exit(0);
 
-// Note: commit filtering removed - age + lastSeen is sufficient
-
-// Read last seen timestamp
 let lastSeen = 0;
 try {
   if (existsSync(LAST_SEEN)) {
@@ -2572,11 +2567,7 @@ for (const line of lines) {
     const entry = JSON.parse(line);
     const ts = new Date(entry.timestamp).getTime();
     const age = now - ts;
-
-    // Only show observations within max age and not yet seen
-    // (removed commit filter - too strict when HEAD moves during a session)
     if (age < MAX_AGE_MS && ts > lastSeen) {
-      // Extract session prefix (without UUID) for shorter log command
       const session = entry.payload.session || "";
       const sessionPrefix = session.replace(/-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i, "");
       relevant.push({ agent: entry.payload.agent, sessionPrefix, message: entry.payload.message });
@@ -2601,7 +2592,6 @@ if (relevant.length > 0) {
   }
   const sessionList = [...sessionPrefixes].map(s => "\\\`./ax.js log " + s + "\\\`").join(" or ");
   console.log("> For more context: \\\`./ax.js mailbox\\\`" + (sessionList ? " or " + sessionList : ""));
-  // Update last seen timestamp
   writeFileSync(LAST_SEEN, now.toString());
 }
 
@@ -2614,7 +2604,6 @@ process.exit(0);
   // Configure the hook in .claude/settings.json at the same time
   const configuredHook = ensureClaudeHookConfig();
   if (!configuredHook) {
-    const hookScriptPath = path.join(HOOKS_DIR, "mailbox-inject.js");
     console.log(`\nTo enable manually, add to .claude/settings.json:\n`);
     console.log(`{
   "hooks": {
@@ -2624,7 +2613,7 @@ process.exit(0);
         "hooks": [
           {
             "type": "command",
-            "command": "node ${hookScriptPath}",
+            "command": "node .ai/hooks/mailbox-inject.js",
             "timeout": 5
           }
         ]
@@ -2638,8 +2627,7 @@ process.exit(0);
 function ensureClaudeHookConfig() {
   const settingsDir = ".claude";
   const settingsPath = path.join(settingsDir, "settings.json");
-  const hookScriptPath = path.join(HOOKS_DIR, "mailbox-inject.js");
-  const hookCommand = `node ${hookScriptPath}`;
+  const hookCommand = "node .ai/hooks/mailbox-inject.js";
 
   try {
     /** @type {ClaudeSettings} */
