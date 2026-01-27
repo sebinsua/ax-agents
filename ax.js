@@ -305,6 +305,18 @@ const TRUNCATE_THINKING_LEN = 300;
 const ARCHANGEL_GIT_CONTEXT_HOURS = 4;
 const ARCHANGEL_GIT_CONTEXT_MAX_LINES = 200;
 const ARCHANGEL_PARENT_CONTEXT_ENTRIES = 10;
+const ARCHANGEL_PREAMBLE = `You are a skilled colleague reviewing in the background.
+
+- Investigate before speaking. If uncertain, read more code and trace the logic until you're confident.
+- Explain WHY something is an issue, not just that it is.
+- Stay in your lane. Focus on your area of expertise.
+- Calibrate to the task. Don't suggest refactors during a bug fix.
+- Be clear. Brief is fine, but never sacrifice clarity.
+- Critical issues that must be fixed → add to the todo list.
+- You have conversation memory. Don't repeat observations you've already made.
+- You're async. Make judgment calls - don't ask questions back.
+
+"No issues found." is a valid response when there's nothing significant to report.`;
 
 /**
  * @param {string} session
@@ -2791,6 +2803,7 @@ async function cmdArchangel(agentName) {
   let lastPlanHash = null;
   /** @type {string | null} */
   let lastTodosHash = null;
+  let isFirstTrigger = true;
 
   async function processChanges() {
     clearTimeout(debounceTimer);
@@ -2835,14 +2848,15 @@ async function cmdArchangel(agentName) {
       }
 
       // Build the prompt
-      let prompt = basePrompt;
+      // First trigger: include preamble and role prompt (archangel has memory)
+      let prompt = isFirstTrigger ? ARCHANGEL_PREAMBLE + "\n\n---\n\n" + basePrompt : "";
 
       // Add orientation context (plan and todos) only if changed since last trigger
       if (includePlan && planContent) {
-        prompt += "\n\n## Current Plan\n\n" + planContent;
+        prompt += (prompt ? "\n\n" : "") + "## Current Plan\n\n" + planContent;
       }
       if (includeTodos && todosContent) {
-        prompt += "\n\n## Current Todos\n\n" + todosContent;
+        prompt += (prompt ? "\n\n" : "") + "## Current Todos\n\n" + todosContent;
       }
 
       if (fileContexts.length > 0) {
@@ -2877,8 +2891,7 @@ async function cmdArchangel(agentName) {
           prompt += "\n\n## Git Context\n\n" + gitContext;
         }
 
-        prompt +=
-          '\n\nReview these changes in the context of what the user is working on. Report any issues found. Keep your response concise.\nIf there are no significant issues, respond with just "No issues found."';
+        prompt += "\n\nReview these changes.";
       } else {
         // Fallback: no JSONL context available, use conversation + git context
         const parentContext = getParentSessionContext(ARCHANGEL_PARENT_CONTEXT_ENTRIES);
@@ -2898,8 +2911,7 @@ async function cmdArchangel(agentName) {
           prompt += "\n\n## Git Context\n\n" + gitContext;
         }
 
-        prompt +=
-          '\n\nReview these changes in the context of what the user is working on. Report any issues found. Keep your response concise.\nIf there are no significant issues, respond with just "No issues found."';
+        prompt += "\n\nReview these changes.";
       }
 
       // Check session still exists
@@ -2928,6 +2940,7 @@ async function cmdArchangel(agentName) {
       await sleep(200); // Allow time for large prompts to be processed
       tmuxSend(sessionName, "Enter");
       await sleep(100); // Ensure Enter is processed
+      isFirstTrigger = false;
 
       // Wait for response
       const { state: endState, screen: afterScreen } = await waitForResponse(
