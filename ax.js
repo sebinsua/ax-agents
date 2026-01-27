@@ -321,6 +321,12 @@ class TimeoutError extends Error {
   }
 }
 
+/**
+ * @param {string} session
+ * @param {(screen: string) => boolean} predicate
+ * @param {number} [timeoutMs]
+ * @returns {Promise<string>}
+ */
 async function waitFor(session, predicate, timeoutMs = STARTUP_TIMEOUT_MS) {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
@@ -474,23 +480,23 @@ function parseCliArgs(args) {
 
   return {
     flags: {
-      wait: values.wait,
-      noWait: values["no-wait"],
-      yolo: values.yolo,
-      fresh: values.fresh,
-      reasoning: values.reasoning,
-      follow: values.follow,
-      all: values.all,
-      orphans: values.orphans,
-      force: values.force,
-      version: values.version,
-      help: values.help,
-      tool: values.tool,
-      session: values.session,
+      wait: Boolean(values.wait),
+      noWait: Boolean(values["no-wait"]),
+      yolo: Boolean(values.yolo),
+      fresh: Boolean(values.fresh),
+      reasoning: Boolean(values.reasoning),
+      follow: Boolean(values.follow),
+      all: Boolean(values.all),
+      orphans: Boolean(values.orphans),
+      force: Boolean(values.force),
+      version: Boolean(values.version),
+      help: Boolean(values.help),
+      tool: /** @type {string | undefined} */ (values.tool),
+      session: /** @type {string | undefined} */ (values.session),
       timeout: values.timeout !== undefined ? Number(values.timeout) : undefined,
       tail: values.tail !== undefined ? Number(values.tail) : undefined,
       limit: values.limit !== undefined ? Number(values.limit) : undefined,
-      branch: values.branch,
+      branch: /** @type {string | undefined} */ (values.branch),
     },
     positionals,
   };
@@ -742,7 +748,7 @@ function tailJsonl(logPath, fromOffset) {
   for (const line of complete) {
     try {
       entries.push(JSON.parse(line));
-    } catch (e) {
+    } catch {
       // Skip malformed lines
     }
   }
@@ -753,8 +759,12 @@ function tailJsonl(logPath, fromOffset) {
 }
 
 /**
+ * @typedef {{command?: string, file_path?: string, path?: string, pattern?: string}} ToolInput
+ */
+
+/**
  * Format a JSONL entry for streaming display.
- * @param {object} entry
+ * @param {{type?: string, message?: {content?: Array<{type?: string, text?: string, name?: string, input?: ToolInput, tool?: string, arguments?: ToolInput}>}}} entry
  * @returns {string | null}
  */
 function formatEntry(entry) {
@@ -809,6 +819,25 @@ function extractPendingToolFromScreen(screen) {
   }
 
   return null;
+}
+
+/**
+ * Format confirmation output with helpful commands
+ * @param {string} screen
+ * @param {Agent} _agent
+ * @returns {string}
+ */
+function formatConfirmationOutput(screen, _agent) {
+  const pendingTool = extractPendingToolFromScreen(screen);
+  const cli = path.basename(process.argv[1], ".js");
+
+  let output = pendingTool || "Confirmation required";
+  output += "\n\ne.g.";
+  output += `\n  ${cli} approve        # for y/n prompts`;
+  output += `\n  ${cli} reject`;
+  output += `\n  ${cli} select N       # for numbered menus`;
+
+  return output;
 }
 
 /**
@@ -1683,7 +1712,7 @@ const State = {
  * @param {string} config.promptSymbol - Symbol indicating ready state
  * @param {string[]} [config.spinners] - Spinner characters indicating thinking
  * @param {RegExp} [config.rateLimitPattern] - Pattern for rate limit detection
- * @param {string[]} [config.thinkingPatterns] - Text patterns indicating thinking
+ * @param {(string | RegExp | ((lines: string) => boolean))[]} [config.thinkingPatterns] - Text patterns indicating thinking
  * @param {(string | ((lines: string) => boolean))[]} [config.confirmPatterns] - Patterns for confirmation dialogs
  * @param {{screen: string[], lastLines: string[]} | null} [config.updatePromptPatterns] - Patterns for update prompts
  * @returns {string} The detected state
@@ -1773,12 +1802,13 @@ function detectState(screen, config) {
 /**
  * @typedef {Object} AgentConfigInput
  * @property {string} name
+ * @property {string} displayName
  * @property {string} startCommand
  * @property {string} yoloCommand
  * @property {string} promptSymbol
  * @property {string[]} [spinners]
  * @property {RegExp} [rateLimitPattern]
- * @property {string[]} [thinkingPatterns]
+ * @property {(string | RegExp | ((lines: string) => boolean))[]} [thinkingPatterns]
  * @property {ConfirmPattern[]} [confirmPatterns]
  * @property {UpdatePromptPatterns | null} [updatePromptPatterns]
  * @property {string[]} [responseMarkers]
@@ -1788,6 +1818,8 @@ function detectState(screen, config) {
  * @property {string} [approveKey]
  * @property {string} [rejectKey]
  * @property {string} [safeAllowedTools]
+ * @property {string | null} [sessionIdFlag]
+ * @property {((sessionName: string) => string | null) | null} [logPathFinder]
  */
 
 class Agent {
@@ -1798,6 +1830,8 @@ class Agent {
     /** @type {string} */
     this.name = config.name;
     /** @type {string} */
+    this.displayName = config.displayName;
+    /** @type {string} */
     this.startCommand = config.startCommand;
     /** @type {string} */
     this.yoloCommand = config.yoloCommand;
@@ -1807,7 +1841,7 @@ class Agent {
     this.spinners = config.spinners || [];
     /** @type {RegExp | undefined} */
     this.rateLimitPattern = config.rateLimitPattern;
-    /** @type {string[]} */
+    /** @type {(string | RegExp | ((lines: string) => boolean))[]} */
     this.thinkingPatterns = config.thinkingPatterns || [];
     /** @type {ConfirmPattern[]} */
     this.confirmPatterns = config.confirmPatterns || [];
@@ -1827,6 +1861,10 @@ class Agent {
     this.rejectKey = config.rejectKey || "n";
     /** @type {string | undefined} */
     this.safeAllowedTools = config.safeAllowedTools;
+    /** @type {string | null} */
+    this.sessionIdFlag = config.sessionIdFlag || null;
+    /** @type {((sessionName: string) => string | null) | null} */
+    this.logPathFinder = config.logPathFinder || null;
   }
 
   /**
@@ -1844,11 +1882,11 @@ class Agent {
     } else {
       base = this.startCommand;
     }
-    // Claude supports --session-id for deterministic session tracking
-    if (this.name === "claude" && sessionName) {
+    // Some agents support session ID flags for deterministic session tracking
+    if (this.sessionIdFlag && sessionName) {
       const parsed = parseSessionName(sessionName);
       if (parsed?.uuid) {
-        return `${base} --session-id ${parsed.uuid}`;
+        return `${base} ${this.sessionIdFlag} ${parsed.uuid}`;
       }
     }
     return base;
@@ -1906,13 +1944,8 @@ class Agent {
    * @returns {string | null}
    */
   findLogPath(sessionName) {
-    const parsed = parseSessionName(sessionName);
-    if (this.name === "claude") {
-      const uuid = parsed?.uuid;
-      if (uuid) return findClaudeLogPath(uuid, sessionName);
-    }
-    if (this.name === "codex") {
-      return findCodexLogPath(sessionName);
+    if (this.logPathFinder) {
+      return this.logPathFinder(sessionName);
     }
     return null;
   }
@@ -2140,6 +2173,7 @@ class Agent {
 
 const CodexAgent = new Agent({
   name: "codex",
+  displayName: "Codex",
   startCommand: "codex --sandbox read-only",
   yoloCommand: "codex --dangerously-bypass-approvals-and-sandbox",
   promptSymbol: "›",
@@ -2159,6 +2193,7 @@ const CodexAgent = new Agent({
   chromePatterns: ["context left", "for shortcuts"],
   reviewOptions: { pr: "1", uncommitted: "2", commit: "3", custom: "4" },
   envVar: "AX_SESSION",
+  logPathFinder: findCodexLogPath,
 });
 
 // =============================================================================
@@ -2167,6 +2202,7 @@ const CodexAgent = new Agent({
 
 const ClaudeAgent = new Agent({
   name: "claude",
+  displayName: "Claude",
   startCommand: "claude",
   yoloCommand: "claude --dangerously-skip-permissions",
   promptSymbol: "❯",
@@ -2199,6 +2235,13 @@ const ClaudeAgent = new Agent({
   envVar: "AX_SESSION",
   approveKey: "1",
   rejectKey: "Escape",
+  sessionIdFlag: "--session-id",
+  logPathFinder: (sessionName) => {
+    const parsed = parseSessionName(sessionName);
+    const uuid = parsed?.uuid;
+    if (uuid) return findClaudeLogPath(uuid, sessionName);
+    return null;
+  },
 });
 
 // =============================================================================
@@ -2244,7 +2287,7 @@ async function waitUntilReady(agent, session, timeoutMs = DEFAULT_TIMEOUT_MS) {
  * @param {Agent} agent
  * @param {string} session
  * @param {number} timeoutMs
- * @param {{onPoll?: Function, onStateChange?: Function, onReady?: Function}} [hooks]
+ * @param {{onPoll?: (screen: string, state: string) => void, onStateChange?: (state: string, lastState: string | null, screen: string) => void, onReady?: (screen: string) => void}} [hooks]
  * @returns {Promise<{state: string, screen: string}>}
  */
 async function pollForResponse(agent, session, timeoutMs, hooks = {}) {
@@ -2282,7 +2325,7 @@ async function pollForResponse(agent, session, timeoutMs, hooks = {}) {
 
     if (sawActivity && stableAt && Date.now() - stableAt >= STABLE_MS) {
       if (state === State.READY) {
-        if (onReady) onReady();
+        if (onReady) onReady(screen);
         return { state, screen };
       }
     }
@@ -3555,7 +3598,7 @@ function cmdMailbox({ limit = 20, branch = null, all = false } = {}) {
  * @param {string} message
  * @param {{noWait?: boolean, yolo?: boolean, timeoutMs?: number}} [options]
  */
-async function cmdAsk(agent, session, message, { noWait = false, yolo = false, timeoutMs } = {}) {
+async function cmdAsk(agent, session, message, { noWait = false, yolo = false, timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
   const sessionExists = session != null && tmuxHasSession(session);
   const nativeYolo = sessionExists && isYoloSession(/** @type {string} */ (session));
 
@@ -3599,7 +3642,7 @@ e.g.
   }
 
   if (state === State.CONFIRMING) {
-    console.log(`CONFIRM: ${agent.parseAction(screen)}`);
+    console.log(`CONFIRM: ${formatConfirmationOutput(screen, agent)}`);
     process.exit(3);
   }
 }
@@ -3616,9 +3659,10 @@ async function cmdApprove(agent, session, { wait = false, timeoutMs } = {}) {
   }
 
   const before = tmuxCapture(session);
-  if (agent.getState(before) !== State.CONFIRMING) {
-    console.log("ERROR: not confirming");
-    process.exit(1);
+  const beforeState = agent.getState(before);
+  if (beforeState !== State.CONFIRMING) {
+    console.log(`Already ${beforeState}`);
+    return;
   }
 
   tmuxSend(session, agent.approveKey);
@@ -3633,7 +3677,7 @@ async function cmdApprove(agent, session, { wait = false, timeoutMs } = {}) {
   }
 
   if (state === State.CONFIRMING) {
-    console.log(`CONFIRM: ${agent.parseAction(screen)}`);
+    console.log(`CONFIRM: ${formatConfirmationOutput(screen, agent)}`);
     process.exit(3);
   }
 
@@ -3650,6 +3694,13 @@ async function cmdReject(agent, session, { wait = false, timeoutMs } = {}) {
   if (!session || !tmuxHasSession(session)) {
     console.log("ERROR: no session");
     process.exit(1);
+  }
+
+  const before = tmuxCapture(session);
+  const beforeState = agent.getState(before);
+  if (beforeState !== State.CONFIRMING) {
+    console.log(`Already ${beforeState}`);
+    return;
   }
 
   tmuxSend(session, agent.rejectKey);
@@ -3758,7 +3809,7 @@ async function cmdReview(
   }
 
   if (state === State.CONFIRMING) {
-    console.log(`CONFIRM: ${agent.parseAction(screen)}`);
+    console.log(`CONFIRM: ${formatConfirmationOutput(screen, agent)}`);
     process.exit(3);
   }
 }
@@ -3791,7 +3842,7 @@ async function cmdOutput(agent, session, index = 0, { wait = false, timeoutMs } 
   }
 
   if (state === State.CONFIRMING) {
-    console.log(`CONFIRM: ${agent.parseAction(screen)}`);
+    console.log(`CONFIRM: ${formatConfirmationOutput(screen, agent)}`);
     process.exit(3);
   }
 
@@ -3827,7 +3878,7 @@ function cmdStatus(agent, session) {
   }
 
   if (state === State.CONFIRMING) {
-    console.log(`CONFIRM: ${agent.parseAction(screen)}`);
+    console.log(`CONFIRM: ${formatConfirmationOutput(screen, agent)}`);
     process.exit(3);
   }
 
@@ -3952,7 +4003,7 @@ async function cmdSelect(agent, session, n, { wait = false, timeoutMs } = {}) {
   }
 
   if (state === State.CONFIRMING) {
-    console.log(`CONFIRM: ${agent.parseAction(screen)}`);
+    console.log(`CONFIRM: ${formatConfirmationOutput(screen, agent)}`);
     process.exit(3);
   }
 
@@ -3987,7 +4038,7 @@ function getAgentFromInvocation() {
  */
 function printHelp(agent, cliName) {
   const name = cliName;
-  const backendName = agent.name === "codex" ? "Codex" : "Claude";
+  const backendName = agent.displayName;
   const hasReview = !!agent.reviewOptions;
 
   console.log(`${name} v${VERSION} - agentic assistant CLI (${backendName})
