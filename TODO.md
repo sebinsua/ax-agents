@@ -2,28 +2,7 @@
 
 ## Critical Bugs
 
-### 1. `--fresh` flag not filtered from message (P0)
-
-**File:** `ax.js:3788-3796`
-
-**Problem:** The `--fresh` flag is missing from the filter list, so it gets passed through to `tmuxSendLiteral()` as part of the message, causing tmux send-keys to fail with "invalid flag --".
-
-```javascript
-// Current filter list (line 3790) - MISSING --fresh:
-!["--wait", "--no-wait", "--yolo", "--reasoning", "--follow", "-f", "--all"].includes(a)
-```
-
-**Symptoms:**
-```bash
-./ax.js --tool=claude --fresh "message"  # ERROR: command send-keys: invalid flag --
-./ax.js "message" --tool=claude --fresh   # Works (message comes first)
-```
-
-**Fix:** Add `"--fresh"` to the filter list.
-
----
-
-### 2. `--no-wait` provides no feedback (P0)
+### 1. `--no-wait` provides no feedback (P0)
 
 **File:** `ax.js:3226`
 
@@ -50,7 +29,7 @@ This gives users a concrete command to check when the message is complete.
 
 ---
 
-### 3. Race condition in state-dependent commands (P1 - needs investigation)
+### 2. Race condition in state-dependent commands (P1 - needs investigation)
 
 **File:** `ax.js:3256-3275` (cmdApprove), and similar in cmdReject
 
@@ -72,7 +51,7 @@ ax approve --session=xxx   # ERROR: not confirming (state changed)
 
 ---
 
-### 4. Silent output when state is READY (P1)
+### 3. Silent output when state is READY (P1)
 
 **Files:** `ax.js:3461-3481` (cmdStatus), `ax.js:3420-3450` (cmdOutput)
 
@@ -99,7 +78,7 @@ console.log("(No response yet)");
 
 ## DX Improvements
 
-### 5. Session confusion - unclear which session is targeted (P1)
+### 4. Session confusion - unclear which session is targeted (P1)
 
 **Problem:** When you run `ax "message"`, it's unclear which session receives it. Default session selection is implicit.
 
@@ -133,7 +112,7 @@ Note: `findParentSession()` is separate and only used by archangels.
 
 ---
 
-### 6. Timeout debugging is opaque (P2)
+### 5. Timeout debugging is opaque (P2)
 
 **Problem:** When timeout occurs, no information about what was happening:
 - Was the agent stuck thinking?
@@ -150,7 +129,7 @@ Hint: Try ax debug --session=xxx to see current screen
 
 ---
 
-### 7. Help text doesn't indicate message must come first (P2)
+### 6. Help text doesn't indicate message must come first (P2)
 
 **File:** `ax.js` help output
 
@@ -160,7 +139,7 @@ Hint: Try ax debug --session=xxx to see current screen
 
 ---
 
-### 9. Help text should show actual default values (P1)
+### 7. Help text should show actual default values (P1)
 
 **File:** `ax.js` help output / `printHelp()`
 
@@ -214,7 +193,7 @@ const reviewMatch = message.match(/^(?:please )?review\s*(.*)/i);
 
 ---
 
-### 10. No streaming output during long-running commands (P1)
+### 9. No streaming output during long-running commands (P1)
 
 **Files:** `ax.js:2016-2052` (waitForResponse), `ax.js:2062-2085` (autoApproveLoop)
 
@@ -293,7 +272,7 @@ The plan has several strong points...
 
 ---
 
-### 11. Clarify `--no-wait` vs backgrounding in help text (P2)
+### 10. Clarify `--no-wait` vs backgrounding in help text (P2)
 
 **Problem:** LLMs might see `--no-wait` and think it's for backgrounding tasks. It's not - it's fire-and-forget. This causes confusion.
 
@@ -329,23 +308,19 @@ The plan has several strong points...
    ax review pr --wait            # May take 5-15 minutes; consider backgrounding
    ```
 
-3. Ensure `--no-wait` output (per #2) explains how to check later.
+3. Ensure `--no-wait` output (per #1) explains how to check later.
 
-**Why this matters:** With #10 (streaming) fixed, backgrounded commands will incrementally write output to the task file, giving visibility into progress. The default for LLMs should be to background long tasks, not block.
+**Why this matters:** With #9 (streaming) fixed, backgrounded commands will incrementally write output to the task file, giving visibility into progress. The default for LLMs should be to background long tasks, not block.
 
 **Dependencies:**
-- #2 must be fixed first (so `--no-wait` actually prints session ID)
-- #10 should be fixed (so backgrounded commands stream output properly)
+- #1 must be fixed first (so `--no-wait` actually prints session ID)
+- #9 should be fixed (so backgrounded commands stream output properly)
 
 ---
 
 ## Test Cases to Add
 
 ```bash
-# Flag ordering
-./ax.js --fresh "test"                    # Should work
-./ax.js --tool=claude --fresh "test"      # Should work (currently fails)
-
 # Feedback on --no-wait
 ./ax.js "test" --no-wait                  # Should print session ID
 

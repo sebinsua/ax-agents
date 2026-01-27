@@ -14,7 +14,162 @@ import {
   extractThinking,
   detectState,
   State,
+  parseCliArgs,
 } from "./ax.js";
+
+// =============================================================================
+// parseCliArgs - CLI argument parsing
+// =============================================================================
+
+describe("parseCliArgs", () => {
+  describe("boolean flags", () => {
+    it("parses --wait", () => {
+      const result = parseCliArgs(["--wait", "message"]);
+      assert.strictEqual(result.flags.wait, true);
+    });
+
+    it("parses --no-wait", () => {
+      const result = parseCliArgs(["--no-wait", "message"]);
+      assert.strictEqual(result.flags.noWait, true);
+    });
+
+    it("parses --yolo", () => {
+      const result = parseCliArgs(["--yolo", "message"]);
+      assert.strictEqual(result.flags.yolo, true);
+    });
+
+    it("parses --fresh", () => {
+      const result = parseCliArgs(["--fresh", "message"]);
+      assert.strictEqual(result.flags.fresh, true);
+    });
+
+    it("parses --reasoning", () => {
+      const result = parseCliArgs(["--reasoning", "agents"]);
+      assert.strictEqual(result.flags.reasoning, true);
+    });
+
+    it("parses --follow and -f", () => {
+      const result1 = parseCliArgs(["--follow", "log"]);
+      assert.strictEqual(result1.flags.follow, true);
+
+      const result2 = parseCliArgs(["-f", "log"]);
+      assert.strictEqual(result2.flags.follow, true);
+    });
+
+    it("parses --all", () => {
+      const result = parseCliArgs(["--all", "mailbox"]);
+      assert.strictEqual(result.flags.all, true);
+    });
+
+    it("parses --version and -V", () => {
+      const result1 = parseCliArgs(["--version"]);
+      assert.strictEqual(result1.flags.version, true);
+
+      const result2 = parseCliArgs(["-V"]);
+      assert.strictEqual(result2.flags.version, true);
+    });
+
+    it("parses --help and -h", () => {
+      const result1 = parseCliArgs(["--help"]);
+      assert.strictEqual(result1.flags.help, true);
+
+      const result2 = parseCliArgs(["-h"]);
+      assert.strictEqual(result2.flags.help, true);
+    });
+  });
+
+  describe("value flags", () => {
+    it("parses --tool=value", () => {
+      const result = parseCliArgs(["--tool=claude", "message"]);
+      assert.strictEqual(result.flags.tool, "claude");
+    });
+
+    it("parses --session=value", () => {
+      const result = parseCliArgs(["--session=abc123", "status"]);
+      assert.strictEqual(result.flags.session, "abc123");
+    });
+
+    it("parses --timeout=value as number", () => {
+      const result = parseCliArgs(["--timeout=30", "message"]);
+      assert.strictEqual(result.flags.timeout, 30);
+    });
+
+    it("parses --tail=value as number", () => {
+      const result = parseCliArgs(["--tail=50", "log"]);
+      assert.strictEqual(result.flags.tail, 50);
+    });
+
+    it("parses --limit=value as number", () => {
+      const result = parseCliArgs(["--limit=10", "mailbox"]);
+      assert.strictEqual(result.flags.limit, 10);
+    });
+
+    it("parses --branch=value", () => {
+      const result = parseCliArgs(["--branch=feature/foo", "mailbox"]);
+      assert.strictEqual(result.flags.branch, "feature/foo");
+    });
+  });
+
+  describe("positionals", () => {
+    it("extracts command as first positional", () => {
+      const result = parseCliArgs(["agents"]);
+      assert.deepStrictEqual(result.positionals, ["agents"]);
+    });
+
+    it("extracts message as positional", () => {
+      const result = parseCliArgs(["hello world"]);
+      assert.deepStrictEqual(result.positionals, ["hello world"]);
+    });
+
+    it("flags do not appear in positionals", () => {
+      const result = parseCliArgs(["--fresh", "--tool=claude", "hello"]);
+      assert.deepStrictEqual(result.positionals, ["hello"]);
+    });
+
+    it("handles flags in any order", () => {
+      const result1 = parseCliArgs(["--fresh", "message"]);
+      const result2 = parseCliArgs(["message", "--fresh"]);
+
+      assert.strictEqual(result1.flags.fresh, true);
+      assert.strictEqual(result2.flags.fresh, true);
+      assert.deepStrictEqual(result1.positionals, ["message"]);
+      assert.deepStrictEqual(result2.positionals, ["message"]);
+    });
+
+    it("handles multiple positionals", () => {
+      const result = parseCliArgs(["send", "hello", "world"]);
+      assert.deepStrictEqual(result.positionals, ["send", "hello", "world"]);
+    });
+  });
+
+  describe("edge cases", () => {
+    it("returns empty positionals for flags only", () => {
+      const result = parseCliArgs(["--version"]);
+      assert.deepStrictEqual(result.positionals, []);
+    });
+
+    it("handles empty args", () => {
+      const result = parseCliArgs([]);
+      assert.deepStrictEqual(result.positionals, []);
+      assert.strictEqual(result.flags.wait, false);
+    });
+
+    it("defaults boolean flags to false", () => {
+      const result = parseCliArgs(["message"]);
+      assert.strictEqual(result.flags.wait, false);
+      assert.strictEqual(result.flags.noWait, false);
+      assert.strictEqual(result.flags.yolo, false);
+      assert.strictEqual(result.flags.fresh, false);
+    });
+
+    it("defaults value flags to undefined", () => {
+      const result = parseCliArgs(["message"]);
+      assert.strictEqual(result.flags.tool, undefined);
+      assert.strictEqual(result.flags.session, undefined);
+      assert.strictEqual(result.flags.timeout, undefined);
+    });
+  });
+});
 
 describe("parseSessionName", () => {
   it("parses partner session with uuid", () => {

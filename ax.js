@@ -28,6 +28,7 @@ import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 import os from "node:os";
+import { parseArgs } from "node:util";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -371,6 +372,80 @@ async function readStdin() {
 }
 
 // =============================================================================
+// =============================================================================
+// Helpers - CLI argument parsing
+// =============================================================================
+
+/**
+ * Parse CLI arguments using Node.js built-in parseArgs.
+ * @param {string[]} args - Command line arguments (without node and script path)
+ * @returns {{ flags: ParsedFlags, positionals: string[] }}
+ *
+ * @typedef {Object} ParsedFlags
+ * @property {boolean} wait
+ * @property {boolean} noWait
+ * @property {boolean} yolo
+ * @property {boolean} fresh
+ * @property {boolean} reasoning
+ * @property {boolean} follow
+ * @property {boolean} all
+ * @property {boolean} version
+ * @property {boolean} help
+ * @property {string} [tool]
+ * @property {string} [session]
+ * @property {number} [timeout]
+ * @property {number} [tail]
+ * @property {number} [limit]
+ * @property {string} [branch]
+ */
+function parseCliArgs(args) {
+  const { values, positionals } = parseArgs({
+    args,
+    options: {
+      // Boolean flags
+      wait: { type: "boolean", default: false },
+      "no-wait": { type: "boolean", default: false },
+      yolo: { type: "boolean", default: false },
+      fresh: { type: "boolean", default: false },
+      reasoning: { type: "boolean", default: false },
+      follow: { type: "boolean", short: "f", default: false },
+      all: { type: "boolean", default: false },
+      version: { type: "boolean", short: "V", default: false },
+      help: { type: "boolean", short: "h", default: false },
+      // Value flags
+      tool: { type: "string" },
+      session: { type: "string" },
+      timeout: { type: "string" },
+      tail: { type: "string" },
+      limit: { type: "string" },
+      branch: { type: "string" },
+    },
+    allowPositionals: true,
+    strict: false, // Don't error on unknown flags
+  });
+
+  return {
+    flags: {
+      wait: values.wait,
+      noWait: values["no-wait"],
+      yolo: values.yolo,
+      fresh: values.fresh,
+      reasoning: values.reasoning,
+      follow: values.follow,
+      all: values.all,
+      version: values.version,
+      help: values.help,
+      tool: values.tool,
+      session: values.session,
+      timeout: values.timeout !== undefined ? Number(values.timeout) : undefined,
+      tail: values.tail !== undefined ? Number(values.tail) : undefined,
+      limit: values.limit !== undefined ? Number(values.limit) : undefined,
+      branch: values.branch,
+    },
+    positionals,
+  };
+}
+
 // Helpers - session tracking
 // =============================================================================
 
@@ -3704,38 +3779,32 @@ async function main() {
   const args = process.argv.slice(2);
   const cliName = path.basename(process.argv[1], ".js");
 
-  if (args.includes("--version") || args.includes("-V")) {
+  // Parse all flags and positionals in one place
+  const { flags, positionals } = parseCliArgs(args);
+
+  if (flags.version) {
     console.log(VERSION);
     process.exit(0);
   }
 
-  // Parse flags
-  const wait = args.includes("--wait");
-  const noWait = args.includes("--no-wait");
-  const yolo = args.includes("--yolo");
-  const fresh = args.includes("--fresh");
-  const reasoning = args.includes("--reasoning");
-  const follow = args.includes("--follow") || args.includes("-f");
+  // Extract flags into local variables for convenience
+  const { wait, noWait, yolo, fresh, reasoning, follow, all } = flags;
 
   // Agent selection
   let agent = getAgentFromInvocation();
-  const toolArg = args.find((a) => a.startsWith("--tool="));
-  if (toolArg) {
-    const tool = toolArg.split("=")[1];
-    if (tool === "claude") agent = ClaudeAgent;
-    else if (tool === "codex") agent = CodexAgent;
+  if (flags.tool) {
+    if (flags.tool === "claude") agent = ClaudeAgent;
+    else if (flags.tool === "codex") agent = CodexAgent;
     else {
-      console.log(`ERROR: unknown tool '${tool}'`);
+      console.log(`ERROR: unknown tool '${flags.tool}'`);
       process.exit(1);
     }
   }
 
   // Session resolution
   let session = agent.getDefaultSession();
-  const sessionArg = args.find((a) => a.startsWith("--session="));
-  if (sessionArg) {
-    const val = sessionArg.split("=")[1];
-    if (val === "self") {
+  if (flags.session) {
+    if (flags.session === "self") {
       const current = tmuxCurrentSession();
       if (!current) {
         console.log("ERROR: --session=self requires running inside tmux");
@@ -3744,72 +3813,45 @@ async function main() {
       session = current;
     } else {
       // Resolve partial names, archangel names, and UUID prefixes
-      session = resolveSessionName(val);
+      session = resolveSessionName(flags.session);
     }
   }
 
-  // Timeout
+  // Timeout (convert seconds to milliseconds)
   let timeoutMs = DEFAULT_TIMEOUT_MS;
-  const timeoutArg = args.find((a) => a.startsWith("--timeout="));
-  if (timeoutArg) {
-    const val = parseInt(timeoutArg.split("=")[1], 10);
-    if (isNaN(val) || val <= 0) {
+  if (flags.timeout !== undefined) {
+    if (isNaN(flags.timeout) || flags.timeout <= 0) {
       console.log("ERROR: invalid timeout");
       process.exit(1);
     }
-    timeoutMs = val * 1000;
+    timeoutMs = flags.timeout * 1000;
   }
 
   // Tail (for log command)
-  let tail = 50;
-  const tailArg = args.find((a) => a.startsWith("--tail="));
-  if (tailArg) {
-    tail = parseInt(tailArg.split("=")[1], 10) || 50;
-  }
+  const tail = flags.tail ?? 50;
 
   // Limit (for mailbox command)
-  let limit = 20;
-  const limitArg = args.find((a) => a.startsWith("--limit="));
-  if (limitArg) {
-    limit = parseInt(limitArg.split("=")[1], 10) || 20;
-  }
+  const limit = flags.limit ?? 20;
 
   // Branch filter (for mailbox command)
-  let branch = null;
-  const branchArg = args.find((a) => a.startsWith("--branch="));
-  if (branchArg) {
-    branch = branchArg.split("=")[1] || null;
-  }
+  const branch = flags.branch ?? null;
 
-  // All flag (for mailbox command - show all regardless of age)
-  const all = args.includes("--all");
-
-  // Filter out flags
-  const filteredArgs = args.filter(
-    (a) =>
-      !["--wait", "--no-wait", "--yolo", "--reasoning", "--follow", "-f", "--all"].includes(a) &&
-      !a.startsWith("--timeout") &&
-      !a.startsWith("--session") &&
-      !a.startsWith("--tool") &&
-      !a.startsWith("--tail") &&
-      !a.startsWith("--limit") &&
-      !a.startsWith("--branch"),
-  );
-  const cmd = filteredArgs[0];
+  // Command is first positional
+  const cmd = positionals[0];
 
   // Dispatch commands
   if (cmd === "agents") return cmdAgents();
-  if (cmd === "summon") return cmdSummon(filteredArgs[1]);
-  if (cmd === "recall") return cmdRecall(filteredArgs[1]);
-  if (cmd === "archangel") return cmdArchangel(filteredArgs[1]);
+  if (cmd === "summon") return cmdSummon(positionals[1]);
+  if (cmd === "recall") return cmdRecall(positionals[1]);
+  if (cmd === "archangel") return cmdArchangel(positionals[1]);
   if (cmd === "kill") return cmdKill(session, { all });
-  if (cmd === "attach") return cmdAttach(filteredArgs[1] || session);
-  if (cmd === "log") return cmdLog(filteredArgs[1] || session, { tail, reasoning, follow });
+  if (cmd === "attach") return cmdAttach(positionals[1] || session);
+  if (cmd === "log") return cmdLog(positionals[1] || session, { tail, reasoning, follow });
   if (cmd === "mailbox") return cmdMailbox({ limit, branch, all });
   if (cmd === "approve") return cmdApprove(agent, session, { wait, timeoutMs });
   if (cmd === "reject") return cmdReject(agent, session, { wait, timeoutMs });
   if (cmd === "review")
-    return cmdReview(agent, session, filteredArgs[1], filteredArgs[2], {
+    return cmdReview(agent, session, positionals[1], positionals[2], {
       wait,
       yolo,
       fresh,
@@ -3818,24 +3860,24 @@ async function main() {
   if (cmd === "status") return cmdStatus(agent, session);
   if (cmd === "debug") return cmdDebug(agent, session);
   if (cmd === "output") {
-    const indexArg = filteredArgs[1];
+    const indexArg = positionals[1];
     const index = indexArg?.startsWith("-") ? parseInt(indexArg, 10) : 0;
     return cmdOutput(agent, session, index, { wait, timeoutMs });
   }
-  if (cmd === "send" && filteredArgs.length > 1)
-    return cmdSend(session, filteredArgs.slice(1).join(" "));
+  if (cmd === "send" && positionals.length > 1)
+    return cmdSend(session, positionals.slice(1).join(" "));
   if (cmd === "compact") return cmdAsk(agent, session, "/compact", { noWait: true, timeoutMs });
   if (cmd === "reset") return cmdAsk(agent, session, "/new", { noWait: true, timeoutMs });
-  if (cmd === "select" && filteredArgs[1])
-    return cmdSelect(agent, session, filteredArgs[1], { wait, timeoutMs });
+  if (cmd === "select" && positionals[1])
+    return cmdSelect(agent, session, positionals[1], { wait, timeoutMs });
 
   // Default: send message
-  let message = filteredArgs.join(" ");
+  let message = positionals.join(" ");
   if (!message && hasStdinData()) {
     message = await readStdin();
   }
 
-  if (!message || cmd === "--help" || cmd === "-h") {
+  if (!message || flags.help) {
     printHelp(agent, cliName);
     process.exit(0);
   }
@@ -3877,6 +3919,7 @@ export {
   parseSessionName,
   parseAgentConfig,
   parseKeySequence,
+  parseCliArgs,
   getClaudeProjectPath,
   matchesPattern,
   getBaseDir,
