@@ -305,16 +305,16 @@ const TRUNCATE_THINKING_LEN = 300;
 const ARCHANGEL_GIT_CONTEXT_HOURS = 4;
 const ARCHANGEL_GIT_CONTEXT_MAX_LINES = 200;
 const ARCHANGEL_PARENT_CONTEXT_ENTRIES = 10;
-const ARCHANGEL_PREAMBLE = `You are a skilled colleague reviewing in the background.
+const ARCHANGEL_PREAMBLE = `## Guidelines
 
 - Investigate before speaking. If uncertain, read more code and trace the logic until you're confident.
 - Explain WHY something is an issue, not just that it is.
-- Stay in your lane. Focus on your area of expertise.
-- Calibrate to the task. Don't suggest refactors during a bug fix.
+- Focus on your area of expertise.
+- Calibrate to the task or plan. Don't suggest refactors during a bug fix.
 - Be clear. Brief is fine, but never sacrifice clarity.
-- Critical issues that must be fixed → add to the todo list.
-- You have conversation memory. Don't repeat observations you've already made.
-- You're async. Make judgment calls - don't ask questions back.
+- For critical issues, request for them to be added to the todo list.
+- Don't repeat observations you've already made unless you have more to say or better clarity.
+- Make judgment calls - don't ask questions.
 
 "No issues found." is a valid response when there's nothing significant to report.`;
 
@@ -2848,8 +2848,10 @@ async function cmdArchangel(agentName) {
       }
 
       // Build the prompt
-      // First trigger: include preamble and role prompt (archangel has memory)
-      let prompt = isFirstTrigger ? ARCHANGEL_PREAMBLE + "\n\n---\n\n" + basePrompt : "";
+      // First trigger: include intro, guidelines, and focus (archangel has memory)
+      let prompt = isFirstTrigger
+        ? `You are the archangel of ${agentName}.\n\n${ARCHANGEL_PREAMBLE}\n\n## Focus\n\n${basePrompt}\n\n---`
+        : "";
 
       // Add orientation context (plan and todos) only if changed since last trigger
       if (includePlan && planContent) {
