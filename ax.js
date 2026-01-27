@@ -27,7 +27,7 @@ import {
   readSync,
   closeSync,
 } from "node:fs";
-import { randomUUID } from "node:crypto";
+import { randomUUID, createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 import os from "node:os";
@@ -542,6 +542,16 @@ function parseSessionName(session) {
  */
 function generateSessionName(tool) {
   return `${tool}-partner-${randomUUID()}`;
+}
+
+/**
+ * Quick hash for change detection (not cryptographic).
+ * @param {string | null | undefined} str
+ * @returns {string | null}
+ */
+function quickHash(str) {
+  if (!str) return null;
+  return createHash("md5").update(str).digest("hex").slice(0, 8);
 }
 
 /**
@@ -2776,6 +2786,12 @@ async function cmdArchangel(agentName) {
   let isProcessing = false;
   const intervalMs = config.interval * 1000;
 
+  // Hash tracking for incremental context updates
+  /** @type {string | null} */
+  let lastPlanHash = null;
+  /** @type {string | null} */
+  let lastTodosHash = null;
+
   async function processChanges() {
     clearTimeout(debounceTimer);
     clearTimeout(maxWaitTimer);
@@ -2798,6 +2814,16 @@ async function cmdArchangel(agentName) {
       const planContent = meta?.slug ? readPlanFile(meta.slug) : null;
       const todosContent = meta?.todos?.length ? formatTodos(meta.todos) : null;
 
+      // Check if plan/todos have changed since last trigger
+      const planHash = quickHash(planContent);
+      const todosHash = quickHash(todosContent);
+      const includePlan = planHash !== lastPlanHash;
+      const includeTodos = todosHash !== lastTodosHash;
+
+      // Update tracking for next trigger
+      lastPlanHash = planHash;
+      lastTodosHash = todosHash;
+
       // Build file-specific context from JSONL
       const fileContexts = [];
       for (const file of files.slice(0, 5)) {
@@ -2811,11 +2837,11 @@ async function cmdArchangel(agentName) {
       // Build the prompt
       let prompt = basePrompt;
 
-      // Add orientation context (plan and todos) if available
-      if (planContent) {
+      // Add orientation context (plan and todos) only if changed since last trigger
+      if (includePlan && planContent) {
         prompt += "\n\n## Current Plan\n\n" + planContent;
       }
-      if (todosContent) {
+      if (includeTodos && todosContent) {
         prompt += "\n\n## Current Todos\n\n" + todosContent;
       }
 
