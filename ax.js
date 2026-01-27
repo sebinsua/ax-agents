@@ -3752,7 +3752,7 @@ Environment:
 
 Examples:
   ${name} "explain this codebase"
-  ${name} "please review the error handling"   # Auto custom review
+  ${name} "review the error handling"           # Auto custom review (${REVIEW_TIMEOUT_MS / 60000}min timeout)
   ${name} review uncommitted --wait
   ${name} approve --wait
   ${name} kill                                 # Kill agents in current project
@@ -3882,14 +3882,14 @@ async function main() {
     process.exit(0);
   }
 
-  // Detect "please review" and route to custom review mode
-  const reviewMatch = message.match(/^please review\s*(.*)/i);
+  // Detect "review ..." or "please review ..." and route to custom review mode
+  const reviewMatch = message.match(/^(?:please )?review\s*(.*)/i);
   if (reviewMatch && agent.reviewOptions) {
     const customInstructions = reviewMatch[1].trim() || null;
     return cmdReview(agent, session, "custom", customInstructions, {
       wait: !noWait,
       yolo,
-      timeoutMs,
+      timeoutMs: flags.timeout !== undefined ? timeoutMs : REVIEW_TIMEOUT_MS,
     });
   }
 

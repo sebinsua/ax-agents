@@ -159,41 +159,7 @@ This keeps help text in sync with code and makes defaults discoverable.
 
 ---
 
-### 8. "please review" auto-detection uses wrong timeout (P0)
-
-**File:** `ax.js:3843-3852`
-
-**Problem:** Messages starting with "please review" are routed to `cmdReview`, but with `timeoutMs` from the caller (2-minute default) instead of `REVIEW_TIMEOUT_MS` (15 minutes).
-
-```javascript
-// Current (broken):
-return cmdReview(agent, session, "custom", customInstructions, {
-  wait: !noWait,
-  yolo,
-  timeoutMs,  // Wrong! Uses 2-minute default
-});
-
-// Should be:
-return cmdReview(agent, session, "custom", customInstructions, {
-  wait: !noWait,
-  yolo,
-  timeoutMs: timeoutMs || REVIEW_TIMEOUT_MS,  // Use 15-minute default for reviews
-});
-```
-
-**Also:** The pattern should match "review ..." not just "please review ...":
-
-```javascript
-// Current:
-const reviewMatch = message.match(/^please review\s*(.*)/i);
-
-// Should be:
-const reviewMatch = message.match(/^(?:please )?review\s*(.*)/i);
-```
-
----
-
-### 9. No streaming output during long-running commands (P1)
+### 8. No streaming output during long-running commands (P1)
 
 **Files:** `ax.js:2016-2052` (waitForResponse), `ax.js:2062-2085` (autoApproveLoop)
 
@@ -272,7 +238,7 @@ The plan has several strong points...
 
 ---
 
-### 10. Clarify `--no-wait` vs backgrounding in help text (P2)
+### 9. Clarify `--no-wait` vs backgrounding in help text (P2)
 
 **Problem:** LLMs might see `--no-wait` and think it's for backgrounding tasks. It's not - it's fire-and-forget. This causes confusion.
 
