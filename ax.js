@@ -727,6 +727,38 @@ function getSessionMeta(sessionName) {
 }
 
 /**
+ * Read a plan file by its slug.
+ * @param {string} slug - The plan slug (e.g., "curious-roaming-pascal")
+ * @returns {string | null} The plan content or null if not found
+ */
+function readPlanFile(slug) {
+  const planPath = path.join(CLAUDE_CONFIG_DIR, "plans", `${slug}.md`);
+  try {
+    if (existsSync(planPath)) {
+      return readFileSync(planPath, "utf-8");
+    }
+  } catch (err) {
+    debugError("readPlanFile", err);
+  }
+  return null;
+}
+
+/**
+ * Format todos for display in a prompt.
+ * @param {Array<{content: string, status: string, id?: string}>} todos
+ * @returns {string}
+ */
+function formatTodos(todos) {
+  if (!todos || todos.length === 0) return "";
+  return todos
+    .map((t) => {
+      const status = t.status === "completed" ? "[x]" : t.status === "in_progress" ? "[>]" : "[ ]";
+      return `${status} ${t.content || "(no content)"}`;
+    })
+    .join("\n");
+}
+
+/**
  * Extract assistant text responses from a JSONL log file.
  * This provides clean text without screen-scraped artifacts.
  * @param {string} logPath - Path to the JSONL log file
@@ -2761,6 +2793,11 @@ async function cmdArchangel(agentName) {
       const parent = findParentSession();
       const logPath = parent ? findClaudeLogPath(parent.uuid, parent.session) : null;
 
+      // Get orientation context (plan and todos) from parent session
+      const meta = parent?.session ? getSessionMeta(parent.session) : null;
+      const planContent = meta?.slug ? readPlanFile(meta.slug) : null;
+      const todosContent = meta?.todos?.length ? formatTodos(meta.todos) : null;
+
       // Build file-specific context from JSONL
       const fileContexts = [];
       for (const file of files.slice(0, 5)) {
@@ -2773,6 +2810,14 @@ async function cmdArchangel(agentName) {
 
       // Build the prompt
       let prompt = basePrompt;
+
+      // Add orientation context (plan and todos) if available
+      if (planContent) {
+        prompt += "\n\n## Current Plan\n\n" + planContent;
+      }
+      if (todosContent) {
+        prompt += "\n\n## Current Todos\n\n" + todosContent;
+      }
 
       if (fileContexts.length > 0) {
         prompt += "\n\n## Recent Edits (from parent session)\n";
