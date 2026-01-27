@@ -43,86 +43,7 @@ Hint: Try ax debug --session=xxx to see current screen
 
 ---
 
-### 3. No streaming output during long-running commands (P1)
-
-**Files:** `ax.js:2016-2052` (waitForResponse), `ax.js:2062-2085` (autoApproveLoop)
-
-**Problem:** Commands block and show nothing until completion.
-
-**Current behavior (bad):**
-```
-$ ax "review PLAN.md" --wait
-[... 2 minutes of silence ...]
-[entire response dumped at once]
-```
-
-**Current code structure:**
-```javascript
-// waitForResponse (line 2016) - runs every 200ms
-while (Date.now() - start < timeoutMs) {
-  await sleep(POLL_MS);
-  const screen = tmuxCapture(session);  // Captures screen
-  const state = agent.getState(screen);  // Detects state
-  // ... checks for terminal states ...
-  // BUT PRINTS NOTHING - just waits
-}
-return { state, screen };  // Only returns at end
-```
-
-The response is then extracted from JSONL via `getResponse()` (line 1880) which calls `getAssistantText()`.
-
-**Architecture:**
-- **JSONL logs** (e.g., `~/.claude/projects/.../uuid.jsonl`) = source of truth for content
-- **Tmux screen** = used only for state detection (THINKING, CONFIRMING, READY)
-- JSONL entries are one JSON object per line, with `type` field ("user", "assistant", "tool_use", "tool_result")
-
-**Desired behavior:**
-```
-$ ax "review PLAN.md" --wait
-Sent to: claude-partner-abc123
-[THINKING]
-> Read(PLAN.md)
-[THINKING]
-
-The plan has several strong points...
-
-[CONFIRMING] Bash: npm test
-```
-
-**Fix: Modify `waitForResponse` to stream from JSONL while polling**
-
-1. Get log path via `agent.findLogPath(session)`
-2. Track file size/offset at start
-3. In the polling loop:
-   - Read new bytes from JSONL since last offset
-   - Parse complete JSON lines
-   - Print based on entry type:
-     - `assistant` with `text` → print the text content
-     - `tool_use` → print `> ToolName(summary of args)`
-     - `tool_result` → skip or print truncated summary
-   - Update offset
-   - Continue existing screen capture for state detection
-   - Print state changes: `[THINKING]`, `[CONFIRMING]`, etc.
-
-4. Exit conditions unchanged (READY, CONFIRMING, RATE_LIMITED, timeout)
-
-**Key functions to add:**
-- `tailJsonl(logPath, fromOffset)` → returns { entries: [], newOffset }
-- `formatEntry(entry)` → returns human-readable string or null
-
-**Example JSONL entry (assistant message):**
-```json
-{"type":"assistant","message":{"content":[{"type":"text","text":"Here is my analysis..."}]}}
-```
-
-**Example JSONL entry (tool use):**
-```json
-{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Read","input":{"file_path":"/foo/bar.js"}}]}}
-```
-
----
-
-### 4. Clarify `--no-wait` vs backgrounding in help text (P2)
+### 3. Clarify `--no-wait` vs backgrounding in help text (P2)
 
 **Problem:** LLMs might see `--no-wait` and think it's for backgrounding tasks. It's not - it's fire-and-forget. This causes confusion.
 
@@ -158,10 +79,52 @@ The plan has several strong points...
    ax review pr --wait            # May take 5-15 minutes; consider backgrounding
    ```
 
-**Why this matters:** With #3 (streaming) fixed, backgrounded commands will incrementally write output to the task file, giving visibility into progress. The default for LLMs should be to background long tasks, not block.
+**Why this matters:** Since streaming is now implemented, backgrounded commands will incrementally write output to the task file, giving visibility into progress. The default for LLMs should be to background long tasks, not block.
 
-**Dependencies:**
-- #3 should be fixed (so backgrounded commands stream output properly)
+---
+
+### 4. Add `--orphans` flag to `ax kill` (P2)
+
+**Problem:** When tmux sessions die or terminals are closed abruptly, Claude processes can become orphaned (reparented to PID 1) and keep running in the background. The current `kill` command only kills tmux sessions—it doesn't clean up these orphaned processes.
+
+**Symptoms:**
+- `top` shows many node processes running `claude`
+- These processes have PPID=1 (orphaned)
+- `ax kill --all` doesn't remove them
+
+**Fix:** Add `--orphans` flag to find and kill orphaned claude processes:
+
+```bash
+ax kill --orphans           # Kill orphaned claude processes in addition to tmux sessions
+ax kill --all --orphans     # Kill all sessions + orphans
+```
+
+**Implementation:**
+1. Add `orphans` boolean flag to parseArgs
+2. In `cmdKill`, if `--orphans`:
+   - Find processes where: command contains "claude", PPID=1
+   - Kill them with SIGKILL
+   - Report count killed
+
+```javascript
+function killOrphanedProcesses() {
+  // Find orphaned claude processes (PPID=1)
+  const result = spawnSync("sh", ["-c",
+    "ps -eo pid,ppid,args | awk '$2 == 1 && /node.*claude/ {print $1}'"
+  ], { encoding: "utf-8" });
+
+  const pids = result.stdout.trim().split("\n").filter(Boolean);
+  for (const pid of pids) {
+    spawnSync("kill", ["-9", pid]);
+  }
+  return pids.length;
+}
+```
+
+3. Update help text:
+```
+kill                      Kill sessions (--all, --session=NAME, --orphans)
+```
 
 ---
 

@@ -23,6 +23,9 @@ import {
   renameSync,
   realpathSync,
   watch,
+  openSync,
+  readSync,
+  closeSync,
 } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
@@ -658,6 +661,107 @@ function getAssistantText(logPath, index = 0) {
     debugError("getAssistantText", err);
     return null;
   }
+}
+
+/**
+ * Read new complete JSON lines from a log file since the given offset.
+ * @param {string | null} logPath
+ * @param {number} fromOffset
+ * @returns {{ entries: object[], newOffset: number }}
+ */
+function tailJsonl(logPath, fromOffset) {
+  if (!logPath || !existsSync(logPath)) {
+    return { entries: [], newOffset: fromOffset };
+  }
+
+  const stats = statSync(logPath);
+  if (stats.size <= fromOffset) {
+    return { entries: [], newOffset: fromOffset };
+  }
+
+  const fd = openSync(logPath, "r");
+  const buffer = Buffer.alloc(stats.size - fromOffset);
+  readSync(fd, buffer, 0, buffer.length, fromOffset);
+  closeSync(fd);
+
+  const text = buffer.toString("utf-8");
+  const lines = text.split("\n");
+
+  // Last line may be incomplete - don't parse it yet
+  const complete = lines.slice(0, -1).filter(Boolean);
+  const incomplete = lines[lines.length - 1];
+
+  const entries = [];
+  for (const line of complete) {
+    try {
+      entries.push(JSON.parse(line));
+    } catch (e) {
+      // Skip malformed lines
+    }
+  }
+
+  // Offset advances by complete lines only
+  const newOffset = fromOffset + text.length - incomplete.length;
+  return { entries, newOffset };
+}
+
+/**
+ * Format a JSONL entry for streaming display.
+ * @param {object} entry
+ * @returns {string | null}
+ */
+function formatEntry(entry) {
+  // Skip tool_result entries (they can be very verbose)
+  if (entry.type === "tool_result") return null;
+
+  // Only process assistant entries
+  if (entry.type !== "assistant") return null;
+
+  const parts = entry.message?.content || [];
+  const output = [];
+
+  for (const part of parts) {
+    if (part.type === "text" && part.text) {
+      output.push(part.text);
+    } else if (part.type === "tool_use" || part.type === "tool_call") {
+      const name = part.name || part.tool || "tool";
+      const input = part.input || part.arguments || {};
+      let summary;
+      if (name === "Bash" && input.command) {
+        summary = input.command.slice(0, 50);
+      } else {
+        const target = input.file_path || input.path || input.pattern || "";
+        summary = target.split("/").pop() || target.slice(0, 30);
+      }
+      output.push(`> ${name}(${summary})`);
+    }
+    // Skip thinking blocks - internal reasoning
+  }
+
+  return output.length > 0 ? output.join("\n") : null;
+}
+
+/**
+ * Extract pending tool from confirmation screen.
+ * @param {string} screen
+ * @returns {string | null}
+ */
+function extractPendingToolFromScreen(screen) {
+  const lines = screen.split("\n");
+
+  // Check recent lines for tool confirmation patterns
+  for (let i = lines.length - 1; i >= Math.max(0, lines.length - 15); i--) {
+    const line = lines[i];
+    // Match tool confirmation patterns like "Bash: command" or "Write: /path/file"
+    const match = line.match(
+      /^\s*(Bash|Write|Edit|Read|Glob|Grep|Task|WebFetch|WebSearch|NotebookEdit|Skill|TodoWrite|TodoRead):\s*(.{1,40})/,
+    );
+    if (match) {
+      return `${match[1]}: ${match[2].trim()}`;
+    }
+  }
+
+  return null;
 }
 
 /**
@@ -1550,26 +1654,7 @@ function detectState(screen, config) {
     return State.RATE_LIMITED;
   }
 
-  // Thinking - spinners (full screen, they're unique UI elements)
-  const spinners = config.spinners || [];
-  if (spinners.some((s) => screen.includes(s))) {
-    return State.THINKING;
-  }
-  // Thinking - text patterns (last lines)
-  const thinkingPatterns = config.thinkingPatterns || [];
-  if (thinkingPatterns.some((p) => lastLines.includes(p))) {
-    return State.THINKING;
-  }
-
-  // Update prompt
-  if (config.updatePromptPatterns) {
-    const { screen: sp, lastLines: lp } = config.updatePromptPatterns;
-    if (sp && sp.some((p) => screen.includes(p)) && lp && lp.some((p) => lastLines.includes(p))) {
-      return State.UPDATE_PROMPT;
-    }
-  }
-
-  // Confirming - check recent lines (not full screen to avoid history false positives)
+  // Confirming - check before THINKING because "Running…" in tool output matches thinking patterns
   const confirmPatterns = config.confirmPatterns || [];
   for (const pattern of confirmPatterns) {
     if (typeof pattern === "function") {
@@ -1579,6 +1664,31 @@ function detectState(screen, config) {
     } else {
       // String patterns check recentLines (bounded range)
       if (recentLines.includes(pattern)) return State.CONFIRMING;
+    }
+  }
+
+  // Thinking - spinners (check last lines only to avoid false positives from timing messages like "✻ Crunched for 32s")
+  const spinners = config.spinners || [];
+  if (spinners.some((s) => lastLines.includes(s))) {
+    return State.THINKING;
+  }
+  // Thinking - text patterns (last lines) - supports strings, regexes, and functions
+  const thinkingPatterns = config.thinkingPatterns || [];
+  if (
+    thinkingPatterns.some((p) => {
+      if (typeof p === "function") return p(lastLines);
+      if (p instanceof RegExp) return p.test(lastLines);
+      return lastLines.includes(p);
+    })
+  ) {
+    return State.THINKING;
+  }
+
+  // Update prompt
+  if (config.updatePromptPatterns) {
+    const { screen: sp, lastLines: lp } = config.updatePromptPatterns;
+    if (sp && sp.some((p) => screen.includes(p)) && lp && lp.some((p) => lastLines.includes(p))) {
+      return State.UPDATE_PROMPT;
     }
   }
 
@@ -2013,9 +2123,11 @@ const ClaudeAgent = new Agent({
   startCommand: "claude",
   yoloCommand: "claude --dangerously-skip-permissions",
   promptSymbol: "❯",
-  spinners: ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"],
+  // Claude Code spinners: ·✢✳✶✻✽ (from cli.js source)
+  spinners: ["·", "✢", "✳", "✶", "✻", "✽"],
   rateLimitPattern: /rate.?limit/i,
-  thinkingPatterns: ["Thinking"],
+  // Claude uses whimsical verbs like "Wibbling…", "Dancing…", etc. Match any capitalized -ing word + ellipsis (… or ...)
+  thinkingPatterns: ["Thinking", /[A-Z][a-z]+ing(…|\.\.\.)/],
   confirmPatterns: [
     "Do you want to make this edit",
     "Do you want to run this command",
@@ -2081,25 +2193,33 @@ async function waitUntilReady(agent, session, timeoutMs = DEFAULT_TIMEOUT_MS) {
 }
 
 /**
- * Wait for agent to process a new message and respond.
- * Waits for screen activity before considering the response complete.
+ * Core polling loop for waiting on agent responses.
  * @param {Agent} agent
  * @param {string} session
- * @param {number} [timeoutMs]
+ * @param {number} timeoutMs
+ * @param {{onPoll?: Function, onStateChange?: Function, onReady?: Function}} [hooks]
  * @returns {Promise<{state: string, screen: string}>}
  */
-async function waitForResponse(agent, session, timeoutMs = DEFAULT_TIMEOUT_MS) {
+async function pollForResponse(agent, session, timeoutMs, hooks = {}) {
+  const { onPoll, onStateChange, onReady } = hooks;
   const start = Date.now();
   const initialScreen = tmuxCapture(session);
 
   let lastScreen = initialScreen;
+  let lastState = null;
   let stableAt = null;
   let sawActivity = false;
 
   while (Date.now() - start < timeoutMs) {
-    await sleep(POLL_MS);
     const screen = tmuxCapture(session);
     const state = agent.getState(screen);
+
+    if (onPoll) onPoll(screen, state);
+
+    if (state !== lastState) {
+      if (onStateChange) onStateChange(state, lastState, screen);
+      lastState = state;
+    }
 
     if (state === State.RATE_LIMITED || state === State.CONFIRMING) {
       return { state, screen };
@@ -2115,6 +2235,7 @@ async function waitForResponse(agent, session, timeoutMs = DEFAULT_TIMEOUT_MS) {
 
     if (sawActivity && stableAt && Date.now() - stableAt >= STABLE_MS) {
       if (state === State.READY) {
+        if (onReady) onReady();
         return { state, screen };
       }
     }
@@ -2122,26 +2243,86 @@ async function waitForResponse(agent, session, timeoutMs = DEFAULT_TIMEOUT_MS) {
     if (state === State.THINKING) {
       sawActivity = true;
     }
+
+    await sleep(POLL_MS);
   }
   throw new Error("timeout");
 }
 
 /**
- * Auto-approve loop that keeps approving confirmations until the agent is ready or rate limited.
- * Used by callers to implement yolo mode on sessions not started with native --yolo.
+ * Wait for agent response without streaming output.
  * @param {Agent} agent
  * @param {string} session
  * @param {number} [timeoutMs]
  * @returns {Promise<{state: string, screen: string}>}
  */
-async function autoApproveLoop(agent, session, timeoutMs = DEFAULT_TIMEOUT_MS) {
+async function waitForResponse(agent, session, timeoutMs = DEFAULT_TIMEOUT_MS) {
+  return pollForResponse(agent, session, timeoutMs);
+}
+
+/**
+ * Wait for agent response with streaming output to console.
+ * @param {Agent} agent
+ * @param {string} session
+ * @param {number} [timeoutMs]
+ * @returns {Promise<{state: string, screen: string}>}
+ */
+async function streamResponse(agent, session, timeoutMs = DEFAULT_TIMEOUT_MS) {
+  let logPath = agent.findLogPath(session);
+  let logOffset = logPath && existsSync(logPath) ? statSync(logPath).size : 0;
+  let printedThinking = false;
+
+  const streamNewEntries = () => {
+    if (!logPath) {
+      logPath = agent.findLogPath(session);
+      if (logPath && existsSync(logPath)) {
+        logOffset = statSync(logPath).size;
+      }
+    }
+    if (logPath) {
+      const { entries, newOffset } = tailJsonl(logPath, logOffset);
+      logOffset = newOffset;
+      for (const entry of entries) {
+        const formatted = formatEntry(entry);
+        if (formatted) console.log(formatted);
+      }
+    }
+  };
+
+  return pollForResponse(agent, session, timeoutMs, {
+    onPoll: () => streamNewEntries(),
+    onStateChange: (state, lastState, screen) => {
+      if (state === State.THINKING && !printedThinking) {
+        console.log("[THINKING]");
+        printedThinking = true;
+      } else if (state === State.CONFIRMING) {
+        const pendingTool = extractPendingToolFromScreen(screen);
+        console.log(pendingTool ? `[CONFIRMING] ${pendingTool}` : "[CONFIRMING]");
+      }
+      if (lastState === State.THINKING && state !== State.THINKING) {
+        printedThinking = false;
+      }
+    },
+    onReady: () => streamNewEntries(),
+  });
+}
+
+/**
+ * Auto-approve loop that keeps approving confirmations until the agent is ready or rate limited.
+ * @param {Agent} agent
+ * @param {string} session
+ * @param {number} timeoutMs
+ * @param {Function} waitFn - waitForResponse or streamResponse
+ * @returns {Promise<{state: string, screen: string}>}
+ */
+async function autoApproveLoop(agent, session, timeoutMs, waitFn) {
   const deadline = Date.now() + timeoutMs;
 
   while (Date.now() < deadline) {
     const remaining = deadline - Date.now();
     if (remaining <= 0) break;
 
-    const { state, screen } = await waitForResponse(agent, session, remaining);
+    const { state, screen } = await waitFn(agent, session, remaining);
 
     if (state === State.RATE_LIMITED || state === State.READY) {
       return { state, screen };
@@ -2153,7 +2334,6 @@ async function autoApproveLoop(agent, session, timeoutMs = DEFAULT_TIMEOUT_MS) {
       continue;
     }
 
-    // Unexpected state - log and continue polling
     debugError("autoApproveLoop", new Error(`unexpected state: ${state}`));
   }
 
@@ -3319,12 +3499,11 @@ e.g.
     return;
   }
 
-  // Yolo mode on a safe session: auto-approve until done
   const useAutoApprove = yolo && !nativeYolo;
 
   const { state, screen } = useAutoApprove
-    ? await autoApproveLoop(agent, activeSession, timeoutMs)
-    : await waitForResponse(agent, activeSession, timeoutMs);
+    ? await autoApproveLoop(agent, activeSession, timeoutMs, streamResponse)
+    : await streamResponse(agent, activeSession, timeoutMs);
 
   if (state === State.RATE_LIMITED) {
     console.log(`RATE_LIMITED: ${agent.parseRetryTime(screen)}`);
@@ -3334,11 +3513,6 @@ e.g.
   if (state === State.CONFIRMING) {
     console.log(`CONFIRM: ${agent.parseAction(screen)}`);
     process.exit(3);
-  }
-
-  const output = agent.getResponse(activeSession, screen);
-  if (output) {
-    console.log(output);
   }
 }
 
@@ -3417,7 +3591,7 @@ async function cmdReview(
   session,
   option,
   customInstructions,
-  { wait = true, yolo = true, fresh = false, timeoutMs = REVIEW_TIMEOUT_MS } = {},
+  { wait = true, yolo = false, fresh = false, timeoutMs = REVIEW_TIMEOUT_MS } = {},
 ) {
   const sessionExists = session != null && tmuxHasSession(session);
 
@@ -3484,12 +3658,11 @@ async function cmdReview(
 
   if (!wait) return;
 
-  // Yolo mode on a safe session: auto-approve until done
   const useAutoApprove = yolo && !nativeYolo;
 
   const { state, screen } = useAutoApprove
-    ? await autoApproveLoop(agent, activeSession, timeoutMs)
-    : await waitForResponse(agent, activeSession, timeoutMs);
+    ? await autoApproveLoop(agent, activeSession, timeoutMs, streamResponse)
+    : await streamResponse(agent, activeSession, timeoutMs);
 
   if (state === State.RATE_LIMITED) {
     console.log(`RATE_LIMITED: ${agent.parseRetryTime(screen)}`);
@@ -3500,9 +3673,6 @@ async function cmdReview(
     console.log(`CONFIRM: ${agent.parseAction(screen)}`);
     process.exit(3);
   }
-
-  const response = agent.getResponse(activeSession, screen);
-  console.log(response || "");
 }
 
 /**
@@ -3891,7 +4061,6 @@ async function main() {
   if (cmd === "review")
     return cmdReview(agent, session, positionals[1], positionals[2], {
       wait,
-      yolo,
       fresh,
       timeoutMs,
     });

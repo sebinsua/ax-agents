@@ -676,11 +676,11 @@ Do you want to proceed?
       assert.strictEqual(detectState(screen, claudeConfig), State.RATE_LIMITED);
     });
 
-    it("thinking beats confirming and ready", () => {
+    it("confirming beats thinking (Running… in tool output shouldn't block confirmation)", () => {
       const screen = `⠋ Working
 Do you want to proceed?
 ❯ `;
-      assert.strictEqual(detectState(screen, claudeConfig), State.THINKING);
+      assert.strictEqual(detectState(screen, claudeConfig), State.CONFIRMING);
     });
 
     it("confirming beats ready", () => {
