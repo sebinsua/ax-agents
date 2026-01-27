@@ -43,27 +43,7 @@ Hint: Try ax debug --session=xxx to see current screen
 
 ---
 
-### 3. Help text should show actual default values (P1)
-
-**File:** `ax.js` help output / `printHelp()`
-
-**Problem:** The help text doesn't show default values for flags like `--timeout`. This causes users (including LLMs) to guess at values instead of relying on sensible defaults.
-
-**Fix:** Interpolate the actual constants into help text:
-
-```javascript
-// Instead of:
-"  --timeout=N               Set timeout in seconds"
-
-// Use:
-`  --timeout=N               Set timeout in seconds (default: ${DEFAULT_TIMEOUT_MS / 1000}, reviews: ${REVIEW_TIMEOUT_MS / 1000})`
-```
-
-This keeps help text in sync with code and makes defaults discoverable.
-
----
-
-### 4. No streaming output during long-running commands (P1)
+### 3. No streaming output during long-running commands (P1)
 
 **Files:** `ax.js:2016-2052` (waitForResponse), `ax.js:2062-2085` (autoApproveLoop)
 
@@ -142,7 +122,7 @@ The plan has several strong points...
 
 ---
 
-### 5. Clarify `--no-wait` vs backgrounding in help text (P2)
+### 4. Clarify `--no-wait` vs backgrounding in help text (P2)
 
 **Problem:** LLMs might see `--no-wait` and think it's for backgrounding tasks. It's not - it's fire-and-forget. This causes confusion.
 
@@ -158,7 +138,7 @@ The plan has several strong points...
 
 2. **Backgrounding (Ctrl+B in Claude Code)**: Command keeps running, output streams to task file, notification on completion
    - This already works - `ax` is just a CLI
-   - But requires #4 (streaming) so output appears incrementally, not buffered until end
+   - But requires #3 (streaming) so output appears incrementally, not buffered until end
 
 **Fixes:**
 
@@ -178,10 +158,10 @@ The plan has several strong points...
    ax review pr --wait            # May take 5-15 minutes; consider backgrounding
    ```
 
-**Why this matters:** With #4 (streaming) fixed, backgrounded commands will incrementally write output to the task file, giving visibility into progress. The default for LLMs should be to background long tasks, not block.
+**Why this matters:** With #3 (streaming) fixed, backgrounded commands will incrementally write output to the task file, giving visibility into progress. The default for LLMs should be to background long tasks, not block.
 
 **Dependencies:**
-- #4 should be fixed (so backgrounded commands stream output properly)
+- #3 should be fixed (so backgrounded commands stream output properly)
 
 ---
 

@@ -3766,7 +3766,7 @@ Flags:
   --session=NAME            Target session by name, archangel name, or UUID prefix (self = current)
   --wait                    Wait for response (for review, approve, etc)
   --no-wait                 Don't wait (for messages, which wait by default)
-  --timeout=N               Set timeout in seconds (default: 120)
+  --timeout=N               Set timeout in seconds (default: ${DEFAULT_TIMEOUT_MS / 1000}, reviews: ${REVIEW_TIMEOUT_MS / 1000})
   --yolo                    Skip all confirmations (dangerous)
   --fresh                   Reset conversation before review
 
