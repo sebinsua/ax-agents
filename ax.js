@@ -3298,7 +3298,17 @@ async function cmdAsk(agent, session, message, { noWait = false, yolo = false, t
   await sleep(50);
   tmuxSend(activeSession, "Enter");
 
-  if (noWait) return;
+  if (noWait) {
+    const parsed = parseSessionName(activeSession);
+    const shortId = parsed?.uuid?.slice(0, 8) || activeSession;
+    const cli = path.basename(process.argv[1], ".js");
+    console.log(`Sent to: ${shortId}
+
+e.g.
+  ${cli} status --session=${shortId}
+  ${cli} output --session=${shortId}`);
+    return;
+  }
 
   // Yolo mode on a safe session: auto-approve until done
   const useAutoApprove = yolo && !nativeYolo;

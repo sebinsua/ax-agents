@@ -2,34 +2,7 @@
 
 ## Critical Bugs
 
-### 1. `--no-wait` provides no feedback (P0)
-
-**File:** `ax.js:3226`
-
-**Problem:** When using `--no-wait`, the function returns silently. User has no idea:
-- Which session received the message
-- Whether it worked
-- How to check the result
-
-```javascript
-if (noWait) return;  // Silent return, no feedback
-```
-
-**Fix:** Print the session ID and a polling command:
-```javascript
-if (noWait) {
-  const shortId = activeSession.split('-').pop().slice(0,8);
-  console.log(`Sent to: ${activeSession}`);
-  console.log(`Poll: ax status --session=${shortId} && ax output --session=${shortId}`);
-  return;
-}
-```
-
-This gives users a concrete command to check when the message is complete.
-
----
-
-### 2. Race condition in state-dependent commands (P1 - needs investigation)
+### 1. Race condition in state-dependent commands (P1 - needs investigation)
 
 **File:** `ax.js:3256-3275` (cmdApprove), and similar in cmdReject
 
@@ -51,7 +24,7 @@ ax approve --session=xxx   # ERROR: not confirming (state changed)
 
 ---
 
-### 3. Silent output when state is READY (P1)
+### 2. Silent output when state is READY (P1)
 
 **Files:** `ax.js:3461-3481` (cmdStatus), `ax.js:3420-3450` (cmdOutput)
 
@@ -78,7 +51,7 @@ console.log("(No response yet)");
 
 ## DX Improvements
 
-### 4. Session confusion - unclear which session is targeted (P1)
+### 3. Session confusion - unclear which session is targeted (P1)
 
 **Problem:** When you run `ax "message"`, it's unclear which session receives it. Default session selection is implicit.
 
@@ -112,7 +85,7 @@ Note: `findParentSession()` is separate and only used by archangels.
 
 ---
 
-### 5. Timeout debugging is opaque (P2)
+### 4. Timeout debugging is opaque (P2)
 
 **Problem:** When timeout occurs, no information about what was happening:
 - Was the agent stuck thinking?
@@ -129,7 +102,7 @@ Hint: Try ax debug --session=xxx to see current screen
 
 ---
 
-### 6. Help text doesn't indicate message must come first (P2)
+### 5. Help text doesn't indicate message must come first (P2)
 
 **File:** `ax.js` help output
 
@@ -139,7 +112,7 @@ Hint: Try ax debug --session=xxx to see current screen
 
 ---
 
-### 7. Help text should show actual default values (P1)
+### 6. Help text should show actual default values (P1)
 
 **File:** `ax.js` help output / `printHelp()`
 
@@ -159,7 +132,7 @@ This keeps help text in sync with code and makes defaults discoverable.
 
 ---
 
-### 8. No streaming output during long-running commands (P1)
+### 7. No streaming output during long-running commands (P1)
 
 **Files:** `ax.js:2016-2052` (waitForResponse), `ax.js:2062-2085` (autoApproveLoop)
 
@@ -238,7 +211,7 @@ The plan has several strong points...
 
 ---
 
-### 9. Clarify `--no-wait` vs backgrounding in help text (P2)
+### 8. Clarify `--no-wait` vs backgrounding in help text (P2)
 
 **Problem:** LLMs might see `--no-wait` and think it's for backgrounding tasks. It's not - it's fire-and-forget. This causes confusion.
 
@@ -254,7 +227,7 @@ The plan has several strong points...
 
 2. **Backgrounding (Ctrl+B in Claude Code)**: Command keeps running, output streams to task file, notification on completion
    - This already works - `ax` is just a CLI
-   - But requires #10 (streaming) so output appears incrementally, not buffered until end
+   - But requires #7 (streaming) so output appears incrementally, not buffered until end
 
 **Fixes:**
 
@@ -274,22 +247,16 @@ The plan has several strong points...
    ax review pr --wait            # May take 5-15 minutes; consider backgrounding
    ```
 
-3. Ensure `--no-wait` output (per #1) explains how to check later.
-
-**Why this matters:** With #9 (streaming) fixed, backgrounded commands will incrementally write output to the task file, giving visibility into progress. The default for LLMs should be to background long tasks, not block.
+**Why this matters:** With #7 (streaming) fixed, backgrounded commands will incrementally write output to the task file, giving visibility into progress. The default for LLMs should be to background long tasks, not block.
 
 **Dependencies:**
-- #1 must be fixed first (so `--no-wait` actually prints session ID)
-- #9 should be fixed (so backgrounded commands stream output properly)
+- #7 should be fixed (so backgrounded commands stream output properly)
 
 ---
 
 ## Test Cases to Add
 
 ```bash
-# Feedback on --no-wait
-./ax.js "test" --no-wait                  # Should print session ID
-
 # Race condition
 # (harder to test - need to simulate state change during command)
 
