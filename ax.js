@@ -4022,8 +4022,8 @@ Commands:
 Flags:
   --tool=NAME               Use specific agent (codex, claude)
   --session=NAME            Target session by name, archangel name, or UUID prefix (self = current)
-  --wait                    Wait for response (for review, approve, etc)
-  --no-wait                 Don't wait (for messages, which wait by default)
+  --wait                    Wait for response (default for messages; required for approve/reject)
+  --no-wait                 Fire-and-forget: send message, print session ID, exit immediately
   --timeout=N               Set timeout in seconds (default: ${DEFAULT_TIMEOUT_MS / 1000}, reviews: ${REVIEW_TIMEOUT_MS / 1000})
   --yolo                    Skip all confirmations (dangerous)
   --fresh                   Reset conversation before review
@@ -4041,6 +4041,7 @@ Environment:
 Examples:
   ${name} "explain this codebase"
   ${name} "review the error handling"           # Auto custom review (${REVIEW_TIMEOUT_MS / 60000}min timeout)
+  ${name} "FYI: auth was refactored" --no-wait  # Send context to a working session (no response needed)
   ${name} review uncommitted --wait
   ${name} approve --wait
   ${name} kill                                 # Kill agents in current project
@@ -4052,7 +4053,10 @@ Examples:
   ${name} summon reviewer                      # Summon by name (creates config if new)
   ${name} recall                               # Recall all archangels
   ${name} recall reviewer                      # Recall one by name
-  ${name} agents                               # List all agents (shows TYPE=archangel)`);
+  ${name} agents                               # List all agents (shows TYPE=archangel)
+
+Note: Reviews and complex tasks may take several minutes.
+      Use Bash run_in_background for long operations (not --no-wait).`);
 }
 
 async function main() {
