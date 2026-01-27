@@ -672,6 +672,61 @@ function findCodexLogPath(sessionName) {
 }
 
 /**
+ * @typedef {Object} SessionMeta
+ * @property {string | null} slug - Plan identifier (if plan is active)
+ * @property {Array<{content: string, status: string, id?: string}> | null} todos - Current todos
+ * @property {string | null} permissionMode - "default", "acceptEdits", "plan"
+ * @property {string | null} gitBranch - Current git branch
+ * @property {string | null} cwd - Working directory
+ */
+
+/**
+ * Get metadata from a Claude session's JSONL file.
+ * Returns null for Codex sessions (different format, no equivalent metadata).
+ * @param {string} sessionName - The tmux session name
+ * @returns {SessionMeta | null}
+ */
+function getSessionMeta(sessionName) {
+  const parsed = parseSessionName(sessionName);
+  if (!parsed) return null;
+
+  // Only Claude sessions have this metadata
+  if (parsed.tool !== "claude") return null;
+  if (!parsed.uuid) return null;
+
+  const logPath = findClaudeLogPath(parsed.uuid, sessionName);
+  if (!logPath || !existsSync(logPath)) return null;
+
+  try {
+    const content = readFileSync(logPath, "utf-8");
+    const lines = content.trim().split("\n").filter(Boolean);
+
+    // Read from end to find most recent entry with metadata
+    for (let i = lines.length - 1; i >= 0; i--) {
+      try {
+        const entry = JSON.parse(lines[i]);
+        // User entries typically have the metadata fields
+        if (entry.type === "user" || entry.slug || entry.gitBranch) {
+          return {
+            slug: entry.slug || null,
+            todos: entry.todos || null,
+            permissionMode: entry.permissionMode || null,
+            gitBranch: entry.gitBranch || null,
+            cwd: entry.cwd || null,
+          };
+        }
+      } catch {
+        // Skip malformed lines
+      }
+    }
+    return null;
+  } catch (err) {
+    debugError("getSessionMeta", err);
+    return null;
+  }
+}
+
+/**
  * Extract assistant text responses from a JSONL log file.
  * This provides clean text without screen-scraped artifacts.
  * @param {string} logPath - Path to the JSONL log file
@@ -1725,8 +1780,8 @@ function detectState(screen, config) {
   // Larger range for confirmation detection (catches dialogs that scrolled slightly)
   const recentLines = lines.slice(-15).join("\n");
 
-  // Rate limited - check full screen (rate limit messages can appear anywhere)
-  if (config.rateLimitPattern && config.rateLimitPattern.test(screen)) {
+  // Rate limited - check recent lines (not full screen to avoid matching historical output)
+  if (config.rateLimitPattern && config.rateLimitPattern.test(recentLines)) {
     return State.RATE_LIMITED;
   }
 
@@ -2508,11 +2563,13 @@ function cmdAgents() {
     const agent = parsed.tool === "claude" ? ClaudeAgent : CodexAgent;
     const screen = tmuxCapture(session);
     const state = agent.getState(screen);
-    const logPath = agent.findLogPath(session);
     const type = parsed.archangelName ? "archangel" : "-";
     const isDefault =
       (parsed.tool === "claude" && session === claudeDefault) ||
       (parsed.tool === "codex" && session === codexDefault);
+
+    // Get session metadata (Claude only)
+    const meta = getSessionMeta(session);
 
     return {
       session,
@@ -2520,7 +2577,8 @@ function cmdAgents() {
       state: state || "unknown",
       target: isDefault ? "*" : "",
       type,
-      log: logPath || "-",
+      plan: meta?.slug || "-",
+      branch: meta?.gitBranch || "-",
     };
   });
 
@@ -2530,13 +2588,14 @@ function cmdAgents() {
   const maxState = Math.max(5, ...agents.map((a) => a.state.length));
   const maxTarget = Math.max(6, ...agents.map((a) => a.target.length));
   const maxType = Math.max(4, ...agents.map((a) => a.type.length));
+  const maxPlan = Math.max(4, ...agents.map((a) => a.plan.length));
 
   console.log(
-    `${"SESSION".padEnd(maxSession)}  ${"TOOL".padEnd(maxTool)}  ${"STATE".padEnd(maxState)}  ${"TARGET".padEnd(maxTarget)}  ${"TYPE".padEnd(maxType)}  LOG`,
+    `${"SESSION".padEnd(maxSession)}  ${"TOOL".padEnd(maxTool)}  ${"STATE".padEnd(maxState)}  ${"TARGET".padEnd(maxTarget)}  ${"TYPE".padEnd(maxType)}  ${"PLAN".padEnd(maxPlan)}  BRANCH`,
   );
   for (const a of agents) {
     console.log(
-      `${a.session.padEnd(maxSession)}  ${a.tool.padEnd(maxTool)}  ${a.state.padEnd(maxState)}  ${a.target.padEnd(maxTarget)}  ${a.type.padEnd(maxType)}  ${a.log}`,
+      `${a.session.padEnd(maxSession)}  ${a.tool.padEnd(maxTool)}  ${a.state.padEnd(maxState)}  ${a.target.padEnd(maxTarget)}  ${a.type.padEnd(maxType)}  ${a.plan.padEnd(maxPlan)}  ${a.branch}`,
     );
   }
 
