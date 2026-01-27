@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
-// ax.js - CLI for interacting with AI agents (Codex, Claude) via tmux
+// ax - CLI for interacting with AI agents (Codex, Claude) via `tmux`.
+// Usage: ax --help
 //
 // Exit codes:
 //   0 - success / ready
@@ -8,13 +9,21 @@
 //   2 - rate limited
 //   3 - awaiting confirmation
 //   4 - thinking
-//
-// Usage: ./ax.js --help
-//        ./axcodex.js --help  (symlink)
-//        ./axclaude.js --help (symlink)
 
 import { execSync, spawnSync, spawn } from "node:child_process";
-import { fstatSync, statSync, readFileSync, readdirSync, existsSync, appendFileSync, mkdirSync, writeFileSync, renameSync, realpathSync, watch } from "node:fs";
+import {
+  fstatSync,
+  statSync,
+  readFileSync,
+  readdirSync,
+  existsSync,
+  appendFileSync,
+  mkdirSync,
+  writeFileSync,
+  renameSync,
+  realpathSync,
+  watch,
+} from "node:fs";
 import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
@@ -110,8 +119,9 @@ const VERSION = packageJson.version;
  */
 
 /**
+ * @typedef {{matcher: string, hooks: Array<{type: string, command: string, timeout?: number}>}} ClaudeHookEntry
  * @typedef {Object} ClaudeSettings
- * @property {{UserPromptSubmit?: Array<{matcher: string, hooks: Array<{type: string, command: string, timeout?: number}>}>}} [hooks]
+ * @property {{UserPromptSubmit?: ClaudeHookEntry[], PostToolUse?: ClaudeHookEntry[], Stop?: ClaudeHookEntry[], [key: string]: ClaudeHookEntry[] | undefined}} [hooks]
  */
 
 const DEBUG = process.env.AX_DEBUG === "1";
@@ -221,7 +231,9 @@ function tmuxKill(session) {
  */
 function tmuxNewSession(session, command) {
   // Use spawnSync to avoid command injection via session/command
-  const result = spawnSync("tmux", ["new-session", "-d", "-s", session, command], { encoding: "utf-8" });
+  const result = spawnSync("tmux", ["new-session", "-d", "-s", session, command], {
+    encoding: "utf-8",
+  });
   if (result.status !== 0) throw new Error(result.stderr || "tmux new-session failed");
 }
 
@@ -230,7 +242,9 @@ function tmuxNewSession(session, command) {
  */
 function tmuxCurrentSession() {
   if (!process.env.TMUX) return null;
-  const result = spawnSync("tmux", ["display-message", "-p", "#S"], { encoding: "utf-8" });
+  const result = spawnSync("tmux", ["display-message", "-p", "#S"], {
+    encoding: "utf-8",
+  });
   if (result.status !== 0) return null;
   return result.stdout.trim();
 }
@@ -242,9 +256,13 @@ function tmuxCurrentSession() {
  */
 function isYoloSession(session) {
   try {
-    const result = spawnSync("tmux", ["display-message", "-t", session, "-p", "#{pane_start_command}"], {
-      encoding: "utf-8",
-    });
+    const result = spawnSync(
+      "tmux",
+      ["display-message", "-t", session, "-p", "#{pane_start_command}"],
+      {
+        encoding: "utf-8",
+      },
+    );
     if (result.status !== 0) return false;
     const cmd = result.stdout.trim();
     return cmd.includes("--dangerously-");
@@ -264,8 +282,14 @@ const POLL_MS = parseInt(process.env.AX_POLL_MS || "200", 10);
 const DEFAULT_TIMEOUT_MS = parseInt(process.env.AX_TIMEOUT_MS || "120000", 10);
 const REVIEW_TIMEOUT_MS = parseInt(process.env.AX_REVIEW_TIMEOUT_MS || "900000", 10); // 15 minutes
 const STARTUP_TIMEOUT_MS = parseInt(process.env.AX_STARTUP_TIMEOUT_MS || "30000", 10);
-const ARCHANGEL_STARTUP_TIMEOUT_MS = parseInt(process.env.AX_ARCHANGEL_STARTUP_TIMEOUT_MS || "60000", 10);
-const ARCHANGEL_RESPONSE_TIMEOUT_MS = parseInt(process.env.AX_ARCHANGEL_RESPONSE_TIMEOUT_MS || "300000", 10); // 5 minutes
+const ARCHANGEL_STARTUP_TIMEOUT_MS = parseInt(
+  process.env.AX_ARCHANGEL_STARTUP_TIMEOUT_MS || "60000",
+  10,
+);
+const ARCHANGEL_RESPONSE_TIMEOUT_MS = parseInt(
+  process.env.AX_ARCHANGEL_RESPONSE_TIMEOUT_MS || "300000",
+  10,
+); // 5 minutes
 const ARCHANGEL_HEALTH_CHECK_MS = parseInt(process.env.AX_ARCHANGEL_HEALTH_CHECK_MS || "30000", 10);
 const STABLE_MS = parseInt(process.env.AX_STABLE_MS || "1000", 10);
 const APPROVE_DELAY_MS = parseInt(process.env.AX_APPROVE_DELAY_MS || "100", 10);
@@ -304,7 +328,9 @@ async function waitFor(session, predicate, timeoutMs = STARTUP_TIMEOUT_MS) {
 function findCallerPid() {
   let pid = process.ppid;
   while (pid > 1) {
-    const result = spawnSync("ps", ["-p", pid.toString(), "-o", "ppid=,comm="], { encoding: "utf-8" });
+    const result = spawnSync("ps", ["-p", pid.toString(), "-o", "ppid=,comm="], {
+      encoding: "utf-8",
+    });
     if (result.status !== 0) break;
     const parts = result.stdout.trim().split(/\s+/);
     const ppid = parseInt(parts[0], 10);
@@ -360,13 +386,17 @@ function parseSessionName(session) {
   const rest = match[2];
 
   // Archangel: {tool}-archangel-{name}-{uuid}
-  const archangelMatch = rest.match(/^archangel-(.+)-([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i);
+  const archangelMatch = rest.match(
+    /^archangel-(.+)-([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i,
+  );
   if (archangelMatch) {
     return { tool, archangelName: archangelMatch[1], uuid: archangelMatch[2] };
   }
 
   // Partner: {tool}-partner-{uuid}
-  const partnerMatch = rest.match(/^partner-([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i);
+  const partnerMatch = rest.match(
+    /^partner-([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i,
+  );
   if (partnerMatch) {
     return { tool, uuid: partnerMatch[1] };
   }
@@ -399,9 +429,13 @@ function getClaudeProjectPath(cwd) {
  */
 function getTmuxSessionCwd(sessionName) {
   try {
-    const result = spawnSync("tmux", ["display-message", "-t", sessionName, "-p", "#{pane_current_path}"], {
-      encoding: "utf-8",
-    });
+    const result = spawnSync(
+      "tmux",
+      ["display-message", "-t", sessionName, "-p", "#{pane_current_path}"],
+      {
+        encoding: "utf-8",
+      },
+    );
     if (result.status === 0) return result.stdout.trim();
   } catch (err) {
     debugError("getTmuxSessionCwd", err);
@@ -425,7 +459,9 @@ function findClaudeLogPath(sessionId, sessionName) {
   if (existsSync(indexPath)) {
     try {
       const index = JSON.parse(readFileSync(indexPath, "utf-8"));
-      const entry = index.entries?.find(/** @param {{sessionId: string, fullPath?: string}} e */ (e) => e.sessionId === sessionId);
+      const entry = index.entries?.find(
+        /** @param {{sessionId: string, fullPath?: string}} e */ (e) => e.sessionId === sessionId,
+      );
       if (entry?.fullPath) return entry.fullPath;
     } catch (err) {
       debugError("findClaudeLogPath", err);
@@ -447,9 +483,13 @@ function findCodexLogPath(sessionName) {
   // For Codex, we need to match by timing since we can't control the session ID
   // Get tmux session creation time
   try {
-    const result = spawnSync("tmux", ["display-message", "-t", sessionName, "-p", "#{session_created}"], {
-      encoding: "utf-8",
-    });
+    const result = spawnSync(
+      "tmux",
+      ["display-message", "-t", sessionName, "-p", "#{session_created}"],
+      {
+        encoding: "utf-8",
+      },
+    );
     if (result.status !== 0) return null;
     const createdTs = parseInt(result.stdout.trim(), 10) * 1000; // tmux gives seconds, we need ms
     if (isNaN(createdTs)) return null;
@@ -483,7 +523,11 @@ function findCodexLogPath(sessionName) {
       // Log file should be created shortly after session start
       // Allow small negative diff (-2s) for clock skew, up to 60s for slow starts
       if (diff >= -2000 && diff < 60000) {
-        candidates.push({ file, diff: Math.abs(diff), path: path.join(dayDir, file) });
+        candidates.push({
+          file,
+          diff: Math.abs(diff),
+          path: path.join(dayDir, file),
+        });
       }
     }
 
@@ -495,7 +539,6 @@ function findCodexLogPath(sessionName) {
     return null;
   }
 }
-
 
 /**
  * Extract assistant text responses from a JSONL log file.
@@ -622,7 +665,7 @@ function loadAgentConfigs() {
     try {
       const content = readFileSync(path.join(agentsDir, file), "utf-8");
       const config = parseAgentConfig(file, content);
-      if (config && 'error' in config) {
+      if (config && "error" in config) {
         console.error(`ERROR: ${file}: ${config.error}`);
         continue;
       }
@@ -653,7 +696,9 @@ function parseAgentConfig(filename, content) {
       return { error: `Missing frontmatter. File must start with '---'` };
     }
     if (!normalized.includes("\n---\n")) {
-      return { error: `Frontmatter not closed. Add '---' on its own line after the YAML block` };
+      return {
+        error: `Frontmatter not closed. Add '---' on its own line after the YAML block`,
+      };
     }
     return { error: `Invalid frontmatter format` };
   }
@@ -674,9 +719,13 @@ function parseAgentConfig(filename, content) {
     const fieldName = line.trim().match(/^(\w+):/)?.[1];
     if (fieldName && !knownFields.includes(fieldName)) {
       // Suggest closest match
-      const suggestions = knownFields.filter((f) => f[0] === fieldName[0] || fieldName.includes(f.slice(0, 3)));
+      const suggestions = knownFields.filter(
+        (f) => f[0] === fieldName[0] || fieldName.includes(f.slice(0, 3)),
+      );
       const hint = suggestions.length > 0 ? ` Did you mean '${suggestions[0]}'?` : "";
-      return { error: `Unknown field '${fieldName}'.${hint} Valid fields: ${knownFields.join(", ")}` };
+      return {
+        error: `Unknown field '${fieldName}'.${hint} Valid fields: ${knownFields.join(", ")}`,
+      };
     }
   }
 
@@ -694,7 +743,9 @@ function parseAgentConfig(filename, content) {
     const rawValue = intervalMatch[1].trim();
     const parsed = parseInt(rawValue, 10);
     if (isNaN(parsed)) {
-      return { error: `Invalid interval '${rawValue}'. Must be a number (seconds)` };
+      return {
+        error: `Invalid interval '${rawValue}'. Must be a number (seconds)`,
+      };
     }
     interval = Math.max(10, Math.min(3600, parsed)); // Clamp to 10s - 1hr
   }
@@ -706,16 +757,22 @@ function parseAgentConfig(filename, content) {
     const rawWatch = watchLine[1].trim();
     // Must be array format
     if (!rawWatch.startsWith("[") || !rawWatch.endsWith("]")) {
-      return { error: `Invalid watch format. Must be an array: watch: ["src/**/*.ts"]` };
+      return {
+        error: `Invalid watch format. Must be an array: watch: ["src/**/*.ts"]`,
+      };
     }
     const inner = rawWatch.slice(1, -1).trim();
     if (!inner) {
-      return { error: `Empty watch array. Add at least one pattern: watch: ["**/*"]` };
+      return {
+        error: `Empty watch array. Add at least one pattern: watch: ["**/*"]`,
+      };
     }
     watchPatterns = inner.split(",").map((p) => p.trim().replace(/^["']|["']$/g, ""));
     // Validate patterns aren't empty
     if (watchPatterns.some((p) => !p)) {
-      return { error: `Invalid watch pattern. Check for trailing commas or empty values` };
+      return {
+        error: `Invalid watch pattern. Check for trailing commas or empty values`,
+      };
     }
   }
 
@@ -831,7 +888,9 @@ function gcMailbox(maxAgeHours = 24) {
 /** @returns {string} */
 function getCurrentBranch() {
   try {
-    return execSync("git branch --show-current 2>/dev/null", { encoding: "utf-8" }).trim();
+    return execSync("git branch --show-current 2>/dev/null", {
+      encoding: "utf-8",
+    }).trim();
   } catch {
     return "unknown";
   }
@@ -840,7 +899,9 @@ function getCurrentBranch() {
 /** @returns {string} */
 function getCurrentCommit() {
   try {
-    return execSync("git rev-parse --short HEAD 2>/dev/null", { encoding: "utf-8" }).trim();
+    return execSync("git rev-parse --short HEAD 2>/dev/null", {
+      encoding: "utf-8",
+    }).trim();
   } catch {
     return "unknown";
   }
@@ -864,7 +925,9 @@ function getMainBranch() {
 /** @returns {string} */
 function getStagedDiff() {
   try {
-    return execSync("git diff --cached 2>/dev/null", { encoding: "utf-8" }).trim();
+    return execSync("git diff --cached 2>/dev/null", {
+      encoding: "utf-8",
+    }).trim();
   } catch {
     return "";
   }
@@ -889,20 +952,18 @@ function getRecentCommitsDiff(hoursAgo = 4) {
     const since = `--since="${hoursAgo} hours ago"`;
 
     // Get list of commits in range
-    const commits = execSync(
-      `git log ${mainBranch}..HEAD ${since} --oneline 2>/dev/null`,
-      { encoding: "utf-8" }
-    ).trim();
+    const commits = execSync(`git log ${mainBranch}..HEAD ${since} --oneline 2>/dev/null`, {
+      encoding: "utf-8",
+    }).trim();
 
     if (!commits) return "";
 
     // Get diff for those commits
     const firstCommit = commits.split("\n").filter(Boolean).pop()?.split(" ")[0];
     if (!firstCommit) return "";
-    return execSync(
-      `git diff ${firstCommit}^..HEAD 2>/dev/null`,
-      { encoding: "utf-8" }
-    ).trim();
+    return execSync(`git diff ${firstCommit}^..HEAD 2>/dev/null`, {
+      encoding: "utf-8",
+    }).trim();
   } catch {
     return "";
   }
@@ -917,7 +978,10 @@ function truncateDiff(diff, maxLines = 200) {
   if (!diff) return "";
   const lines = diff.split("\n");
   if (lines.length <= maxLines) return diff;
-  return lines.slice(0, maxLines).join("\n") + `\n\n... (truncated, ${lines.length - maxLines} more lines)`;
+  return (
+    lines.slice(0, maxLines).join("\n") +
+    `\n\n... (truncated, ${lines.length - maxLines} more lines)`
+  );
 }
 
 /**
@@ -1002,18 +1066,23 @@ function findCurrentClaudeSession() {
   const claudeProjectDir = path.join(CLAUDE_CONFIG_DIR, "projects", projectPath);
   if (existsSync(claudeProjectDir)) {
     try {
-      const files = readdirSync(claudeProjectDir).filter(f => f.endsWith(".jsonl"));
+      const files = readdirSync(claudeProjectDir).filter((f) => f.endsWith(".jsonl"));
       for (const file of files) {
         const uuid = file.replace(".jsonl", "");
         // Skip if we already have this from tmux sessions
-        if (candidates.some(c => c.uuid === uuid)) continue;
+        if (candidates.some((c) => c.uuid === uuid)) continue;
 
         const logPath = path.join(claudeProjectDir, file);
         try {
           const stat = statSync(logPath);
           // Only consider logs modified in the last hour (active sessions)
           if (Date.now() - stat.mtimeMs < MAILBOX_MAX_AGE_MS) {
-            candidates.push({ session: null, uuid, mtime: stat.mtimeMs, logPath });
+            candidates.push({
+              session: null,
+              uuid,
+              mtime: stat.mtimeMs,
+              logPath,
+            });
           }
         } catch (err) {
           debugError("findCurrentClaudeSession:logStat", err);
@@ -1085,7 +1154,9 @@ function getParentSessionContext(maxEntries = 20) {
           if (typeof c === "string" && c.length > 10) {
             entries.push({ type: "user", text: c });
           } else if (Array.isArray(c)) {
-            const text = c.find(/** @param {{type: string, text?: string}} x */ (x) => x.type === "text")?.text;
+            const text = c.find(
+              /** @param {{type: string, text?: string}} x */ (x) => x.type === "text",
+            )?.text;
             if (text && text.length > 10) {
               entries.push({ type: "user", text });
             }
@@ -1093,7 +1164,10 @@ function getParentSessionContext(maxEntries = 20) {
         } else if (entry.type === "assistant") {
           /** @type {{type: string, text?: string}[]} */
           const parts = entry.message?.content || [];
-          const text = parts.filter((p) => p.type === "text").map((p) => p.text || "").join("\n");
+          const text = parts
+            .filter((p) => p.type === "text")
+            .map((p) => p.text || "")
+            .join("\n");
           // Only include assistant responses with meaningful text
           if (text && text.length > 20) {
             entries.push({ type: "assistant", text });
@@ -1105,7 +1179,7 @@ function getParentSessionContext(maxEntries = 20) {
     }
 
     // Format recent conversation
-    const formatted = entries.slice(-maxEntries).map(e => {
+    const formatted = entries.slice(-maxEntries).map((e) => {
       const preview = e.text.slice(0, 500).replace(/\n/g, " ");
       return `**${e.type === "user" ? "User" : "Assistant"}**: ${preview}`;
     });
@@ -1148,10 +1222,16 @@ function extractFileEditContext(logPath, filePath) {
 
   // Parse all entries
   /** @type {any[]} */
-  const entries = lines.map((line, idx) => {
-    try { return { idx, ...JSON.parse(line) }; }
-    catch (err) { debugError("extractFileEditContext:parse", err); return null; }
-  }).filter(Boolean);
+  const entries = lines
+    .map((line, idx) => {
+      try {
+        return { idx, ...JSON.parse(line) };
+      } catch (err) {
+        debugError("extractFileEditContext:parse", err);
+        return null;
+      }
+    })
+    .filter(Boolean);
 
   // Find Write/Edit tool calls for this file (scan backwards, want most recent)
   /** @type {any} */
@@ -1164,9 +1244,10 @@ function extractFileEditContext(logPath, filePath) {
 
     /** @type {any[]} */
     const msgContent = entry.message?.content || [];
-    const toolCalls = msgContent.filter((/** @type {any} */ c) =>
-      (c.type === "tool_use" || c.type === "tool_call") &&
-      (c.name === "Write" || c.name === "Edit")
+    const toolCalls = msgContent.filter(
+      (/** @type {any} */ c) =>
+        (c.type === "tool_use" || c.type === "tool_call") &&
+        (c.name === "Write" || c.name === "Edit"),
     );
 
     for (const tc of toolCalls) {
@@ -1217,8 +1298,9 @@ function extractFileEditContext(logPath, filePath) {
 
     /** @type {any[]} */
     const msgContent = entry.message?.content || [];
-    const readCalls = msgContent.filter((/** @type {any} */ c) =>
-      (c.type === "tool_use" || c.type === "tool_call") && c.name === "Read"
+    const readCalls = msgContent.filter(
+      (/** @type {any} */ c) =>
+        (c.type === "tool_use" || c.type === "tool_call") && c.name === "Read",
     );
 
     for (const rc of readCalls) {
@@ -1233,9 +1315,10 @@ function extractFileEditContext(logPath, filePath) {
     if (entry.type !== "assistant") continue;
     /** @type {any[]} */
     const msgContent = entry.message?.content || [];
-    const edits = msgContent.filter((/** @type {any} */ c) =>
-      (c.type === "tool_use" || c.type === "tool_call") &&
-      (c.name === "Write" || c.name === "Edit")
+    const edits = msgContent.filter(
+      (/** @type {any} */ c) =>
+        (c.type === "tool_use" || c.type === "tool_call") &&
+        (c.name === "Write" || c.name === "Edit"),
     );
     for (const e of edits) {
       const input = e.input || e.arguments || {};
@@ -1250,11 +1333,11 @@ function extractFileEditContext(logPath, filePath) {
     toolCall: {
       name: editEntry.toolCall.name,
       input: editEntry.toolCall.input || editEntry.toolCall.arguments,
-      id: editEntry.toolCall.id
+      id: editEntry.toolCall.id,
     },
     subsequentErrors,
     readsBefore: [...new Set(readsBefore)].slice(0, 10),
-    editSequence
+    editSequence,
   };
 }
 
@@ -1348,9 +1431,10 @@ function watchForChanges(patterns, callback) {
     }
   }
 
-  return () => { for (const w of watchers) w.close(); };
+  return () => {
+    for (const w of watchers) w.close();
+  };
 }
-
 
 // =============================================================================
 // State
@@ -1429,7 +1513,7 @@ function detectState(screen, config) {
     // Check if any line has the prompt followed by pasted content indicator
     const linesArray = lastLines.split("\n");
     const promptWithPaste = linesArray.some(
-      (l) => l.includes(config.promptSymbol) && l.includes("[Pasted text")
+      (l) => l.includes(config.promptSymbol) && l.includes("[Pasted text"),
     );
     if (!promptWithPaste) {
       return State.READY;
@@ -1640,7 +1724,12 @@ class Agent {
       if (/^(run|execute|create|delete|modify|write)/i.test(line)) return line;
     }
 
-    return lines.filter((l) => l && !l.match(/^[╭╮╰╯│─]+$/)).slice(0, 2).join(" | ") || "action";
+    return (
+      lines
+        .filter((l) => l && !l.match(/^[╭╮╰╯│─]+$/))
+        .slice(0, 2)
+        .join(" | ") || "action"
+    );
   }
 
   /**
@@ -1716,7 +1805,9 @@ class Agent {
 
     // Fallback: extract after last prompt
     if (filtered.length === 0) {
-      const lastPromptIdx = lines.findLastIndex((/** @type {string} */ l) => l.startsWith(this.promptSymbol));
+      const lastPromptIdx = lines.findLastIndex((/** @type {string} */ l) =>
+        l.startsWith(this.promptSymbol),
+      );
       if (lastPromptIdx >= 0 && lastPromptIdx < lines.length - 1) {
         const afterPrompt = lines
           .slice(lastPromptIdx + 1)
@@ -1730,14 +1821,14 @@ class Agent {
       // This handles the case where Claude finished and shows a new empty prompt
       if (lastPromptIdx >= 0) {
         const lastPromptLine = lines[lastPromptIdx];
-        const isEmptyPrompt = lastPromptLine.trim() === this.promptSymbol ||
-                              lastPromptLine.match(/^❯\s*$/);
+        const isEmptyPrompt =
+          lastPromptLine.trim() === this.promptSymbol || lastPromptLine.match(/^❯\s*$/);
         if (isEmptyPrompt) {
           // Find the previous prompt (user's input) and extract content between
           // Note: [Pasted text is Claude's truncated output indicator, NOT a prompt
-          const prevPromptIdx = lines.slice(0, lastPromptIdx).findLastIndex(
-            (/** @type {string} */ l) => l.startsWith(this.promptSymbol)
-          );
+          const prevPromptIdx = lines
+            .slice(0, lastPromptIdx)
+            .findLastIndex((/** @type {string} */ l) => l.startsWith(this.promptSymbol));
           if (prevPromptIdx >= 0) {
             const betweenPrompts = lines
               .slice(prevPromptIdx + 1, lastPromptIdx)
@@ -1758,23 +1849,25 @@ class Agent {
    * @returns {string}
    */
   cleanResponse(response) {
-    return response
-      // Remove tool call lines (Search, Read, Grep, etc.)
-      .replace(/^[⏺•]\s*(Search|Read|Grep|Glob|Write|Edit|Bash)\([^)]*\).*$/gm, "")
-      // Remove tool result lines
-      .replace(/^⎿\s+.*$/gm, "")
-      // Remove "Sautéed for Xs" timing lines
-      .replace(/^✻\s+Sautéed for.*$/gm, "")
-      // Remove expand hints
-      .replace(/\(ctrl\+o to expand\)/g, "")
-      // Clean up multiple blank lines
-      .replace(/\n{3,}/g, "\n\n")
-      // Original cleanup
-      .replace(/^[•⏺-]\s*/, "")
-      .replace(/^\*\*(.+)\*\*/, "$1")
-      .replace(/\n  /g, "\n")
-      .replace(/─+\s*$/, "")
-      .trim();
+    return (
+      response
+        // Remove tool call lines (Search, Read, Grep, etc.)
+        .replace(/^[⏺•]\s*(Search|Read|Grep|Glob|Write|Edit|Bash)\([^)]*\).*$/gm, "")
+        // Remove tool result lines
+        .replace(/^⎿\s+.*$/gm, "")
+        // Remove "Sautéed for Xs" timing lines
+        .replace(/^✻\s+Sautéed for.*$/gm, "")
+        // Remove expand hints
+        .replace(/\(ctrl\+o to expand\)/g, "")
+        // Clean up multiple blank lines
+        .replace(/\n{3,}/g, "\n\n")
+        // Original cleanup
+        .replace(/^[•⏺-]\s*/, "")
+        .replace(/^\*\*(.+)\*\*/, "$1")
+        .replace(/\n  /g, "\n")
+        .replace(/─+\s*$/, "")
+        .trim()
+    );
   }
 
   /**
@@ -1857,9 +1950,18 @@ const ClaudeAgent = new Agent({
   ],
   updatePromptPatterns: null,
   responseMarkers: ["⏺", "•", "- ", "**"],
-  chromePatterns: ["↵ send", "Esc to cancel", "shortcuts", "for more options", "docs.anthropic.com", "⏵⏵", "bypass permissions", "shift+Tab to cycle"],
+  chromePatterns: [
+    "↵ send",
+    "Esc to cancel",
+    "shortcuts",
+    "for more options",
+    "docs.anthropic.com",
+    "⏵⏵",
+    "bypass permissions",
+    "shift+Tab to cycle",
+  ],
   reviewOptions: null,
-  safeAllowedTools: "Bash(git:*) Read Glob Grep",  // Default: auto-approve read-only tools
+  safeAllowedTools: "Bash(git:*) Read Glob Grep", // Default: auto-approve read-only tools
   envVar: "AX_SESSION",
   approveKey: "1",
   rejectKey: "Escape",
@@ -1883,7 +1985,11 @@ async function waitUntilReady(agent, session, timeoutMs = DEFAULT_TIMEOUT_MS) {
   const initialState = agent.getState(initialScreen);
 
   // Already in terminal state
-  if (initialState === State.RATE_LIMITED || initialState === State.CONFIRMING || initialState === State.READY) {
+  if (
+    initialState === State.RATE_LIMITED ||
+    initialState === State.CONFIRMING ||
+    initialState === State.READY
+  ) {
     return { state: initialState, screen: initialScreen };
   }
 
@@ -2063,11 +2169,11 @@ function cmdAgents() {
   const maxType = Math.max(4, ...agents.map((a) => a.type.length));
 
   console.log(
-    `${"SESSION".padEnd(maxSession)}  ${"TOOL".padEnd(maxTool)}  ${"STATE".padEnd(maxState)}  ${"TYPE".padEnd(maxType)}  LOG`
+    `${"SESSION".padEnd(maxSession)}  ${"TOOL".padEnd(maxTool)}  ${"STATE".padEnd(maxState)}  ${"TYPE".padEnd(maxType)}  LOG`,
   );
   for (const a of agents) {
     console.log(
-      `${a.session.padEnd(maxSession)}  ${a.tool.padEnd(maxTool)}  ${a.state.padEnd(maxState)}  ${a.type.padEnd(maxType)}  ${a.log}`
+      `${a.session.padEnd(maxSession)}  ${a.tool.padEnd(maxTool)}  ${a.state.padEnd(maxState)}  ${a.type.padEnd(maxType)}  ${a.log}`,
     );
   }
 }
@@ -2114,7 +2220,9 @@ function startArchangel(config, parentSession = null) {
     env,
   });
   child.unref();
-  console.log(`Summoning: ${config.name} (pid ${child.pid})${parentSession ? ` [parent: ${parentSession.session}]` : ""}`);
+  console.log(
+    `Summoning: ${config.name} (pid ${child.pid})${parentSession ? ` [parent: ${parentSession.session}]` : ""}`,
+  );
 }
 
 // =============================================================================
@@ -2150,7 +2258,9 @@ async function cmdArchangel(agentName) {
   // Check agent CLI is installed before trying to start
   const cliCheck = spawnSync("which", [agent.name], { encoding: "utf-8" });
   if (cliCheck.status !== 0) {
-    console.error(`[archangel:${agentName}] ERROR: ${agent.name} CLI is not installed or not in PATH`);
+    console.error(
+      `[archangel:${agentName}] ERROR: ${agent.name} CLI is not installed or not in PATH`,
+    );
     process.exit(1);
   }
 
@@ -2212,7 +2322,7 @@ async function cmdArchangel(agentName) {
     isProcessing = true;
 
     const files = [...changedFiles];
-    changedFiles = new Set();  // atomic swap to avoid losing changes during processing
+    changedFiles = new Set(); // atomic swap to avoid losing changes during processing
 
     try {
       // Get parent session log path for JSONL extraction
@@ -2221,7 +2331,8 @@ async function cmdArchangel(agentName) {
 
       // Build file-specific context from JSONL
       const fileContexts = [];
-      for (const file of files.slice(0, 5)) { // Limit to 5 files
+      for (const file of files.slice(0, 5)) {
+        // Limit to 5 files
         const ctx = extractFileEditContext(logPath, file);
         if (ctx) {
           fileContexts.push({ file, ...ctx });
@@ -2248,26 +2359,34 @@ async function cmdArchangel(agentName) {
           }
 
           if (ctx.readsBefore.length > 0) {
-            const reads = ctx.readsBefore.map(f => f.split("/").pop()).join(", ");
+            const reads = ctx.readsBefore.map((f) => f.split("/").pop()).join(", ");
             prompt += `**Files read before:** ${reads}\n`;
           }
         }
 
         prompt += "\n\n## Files Changed\n  - " + files.slice(0, 10).join("\n  - ");
 
-        const gitContext = buildGitContext(ARCHANGEL_GIT_CONTEXT_HOURS, ARCHANGEL_GIT_CONTEXT_MAX_LINES);
+        const gitContext = buildGitContext(
+          ARCHANGEL_GIT_CONTEXT_HOURS,
+          ARCHANGEL_GIT_CONTEXT_MAX_LINES,
+        );
         if (gitContext) {
           prompt += "\n\n## Git Context\n\n" + gitContext;
         }
 
-        prompt += '\n\nReview these changes in the context of what the user is working on. Report any issues found. Keep your response concise.\nIf there are no significant issues, respond with just "No issues found."';
+        prompt +=
+          '\n\nReview these changes in the context of what the user is working on. Report any issues found. Keep your response concise.\nIf there are no significant issues, respond with just "No issues found."';
       } else {
         // Fallback: no JSONL context available, use conversation + git context
         const parentContext = getParentSessionContext(ARCHANGEL_PARENT_CONTEXT_ENTRIES);
-        const gitContext = buildGitContext(ARCHANGEL_GIT_CONTEXT_HOURS, ARCHANGEL_GIT_CONTEXT_MAX_LINES);
+        const gitContext = buildGitContext(
+          ARCHANGEL_GIT_CONTEXT_HOURS,
+          ARCHANGEL_GIT_CONTEXT_MAX_LINES,
+        );
 
         if (parentContext) {
-          prompt += "\n\n## Main Session Context\n\nThe user is currently working on:\n\n" + parentContext;
+          prompt +=
+            "\n\n## Main Session Context\n\nThe user is currently working on:\n\n" + parentContext;
         }
 
         prompt += "\n\n## Files Changed\n  - " + files.slice(0, 10).join("\n  - ");
@@ -2276,9 +2395,9 @@ async function cmdArchangel(agentName) {
           prompt += "\n\n## Git Context\n\n" + gitContext;
         }
 
-        prompt += '\n\nReview these changes in the context of what the user is working on. Report any issues found. Keep your response concise.\nIf there are no significant issues, respond with just "No issues found."';
+        prompt +=
+          '\n\nReview these changes in the context of what the user is working on. Report any issues found. Keep your response concise.\nIf there are no significant issues, respond with just "No issues found."';
       }
-
 
       // Check session still exists
       if (!tmuxHasSession(sessionName)) {
@@ -2308,22 +2427,30 @@ async function cmdArchangel(agentName) {
       await sleep(100); // Ensure Enter is processed
 
       // Wait for response
-      const { state: endState, screen: afterScreen } = await waitForResponse(agent, sessionName, ARCHANGEL_RESPONSE_TIMEOUT_MS);
+      const { state: endState, screen: afterScreen } = await waitForResponse(
+        agent,
+        sessionName,
+        ARCHANGEL_RESPONSE_TIMEOUT_MS,
+      );
 
       if (endState === State.RATE_LIMITED) {
         console.error(`[archangel:${agentName}] Rate limited - stopping`);
         process.exit(2);
       }
 
-
       const cleanedResponse = agent.getResponse(sessionName, afterScreen) || "";
 
       // Sanity check: skip garbage responses (screen scraping artifacts)
-      const isGarbage = cleanedResponse.includes("[Pasted text") ||
+      const isGarbage =
+        cleanedResponse.includes("[Pasted text") ||
         cleanedResponse.match(/^\+\d+ lines\]/) ||
         cleanedResponse.length < 20;
 
-      if (cleanedResponse && !isGarbage && !cleanedResponse.toLowerCase().includes("no issues found")) {
+      if (
+        cleanedResponse &&
+        !isGarbage &&
+        !cleanedResponse.toLowerCase().includes("no issues found")
+      ) {
         writeToMailbox({
           agent: /** @type {string} */ (agentName),
           session: sessionName,
@@ -2345,7 +2472,10 @@ async function cmdArchangel(agentName) {
 
   function scheduleProcessChanges() {
     processChanges().catch((err) => {
-      console.error(`[archangel:${agentName}] Unhandled error:`, err instanceof Error ? err.message : err);
+      console.error(
+        `[archangel:${agentName}] Unhandled error:`,
+        err instanceof Error ? err.message : err,
+      );
     });
   }
 
@@ -2499,7 +2629,7 @@ async function cmdRecall(name = null) {
 }
 
 // Version of the hook script template - bump when making changes
-const HOOK_SCRIPT_VERSION = "3";
+const HOOK_SCRIPT_VERSION = "4";
 
 function ensureMailboxHookScript() {
   const hooksDir = HOOKS_DIR;
@@ -2522,24 +2652,49 @@ ${versionMarker}
 import { readFileSync, writeFileSync, existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { createHash } from "node:crypto";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const AI_DIR = join(__dirname, "..");
 const DEBUG = process.env.AX_DEBUG === "1";
 const MAILBOX = join(AI_DIR, "mailbox.jsonl");
-const LAST_SEEN = join(AI_DIR, "mailbox-last-seen");
 const MAX_AGE_MS = 60 * 60 * 1000;
+
+// Read hook input from stdin
+let hookInput = {};
+try {
+  const stdinData = readFileSync(0, "utf-8").trim();
+  if (stdinData) hookInput = JSON.parse(stdinData);
+} catch (err) {
+  if (DEBUG) console.error("[hook] stdin parse:", err.message);
+}
+
+const sessionId = hookInput.session_id || "";
+const hookEvent = hookInput.hook_event_name || "";
+
+if (DEBUG) console.error("[hook] session:", sessionId, "event:", hookEvent);
+
+// NO-OP for archangel or partner sessions
+if (sessionId.includes("-archangel-") || sessionId.includes("-partner-")) {
+  if (DEBUG) console.error("[hook] skipping non-parent session");
+  process.exit(0);
+}
+
+// Per-session last-seen tracking (single JSON file, self-cleaning)
+const sessionHash = sessionId ? createHash("md5").update(sessionId).digest("hex").slice(0, 8) : "default";
+const LAST_SEEN_FILE = join(AI_DIR, "mailbox-last-seen.json");
 
 if (!existsSync(MAILBOX)) process.exit(0);
 
-let lastSeen = 0;
+let lastSeenMap = {};
 try {
-  if (existsSync(LAST_SEEN)) {
-    lastSeen = parseInt(readFileSync(LAST_SEEN, "utf-8").trim(), 10) || 0;
+  if (existsSync(LAST_SEEN_FILE)) {
+    lastSeenMap = JSON.parse(readFileSync(LAST_SEEN_FILE, "utf-8"));
   }
 } catch (err) {
   if (DEBUG) console.error("[hook] readLastSeen:", err.message);
 }
+const lastSeen = lastSeenMap[sessionHash] || 0;
 
 const now = Date.now();
 const lines = readFileSync(MAILBOX, "utf-8").trim().split("\\n").filter(Boolean);
@@ -2561,21 +2716,39 @@ for (const line of lines) {
 }
 
 if (relevant.length > 0) {
-  console.log("## Background Agents");
-  console.log("");
-  console.log("Background agents watching your files found:");
-  console.log("");
   const sessionPrefixes = new Set();
+  let messageLines = [];
+  messageLines.push("## Background Agents");
+  messageLines.push("");
+  messageLines.push("Background agents watching your files found:");
+  messageLines.push("");
   for (const { agent, sessionPrefix, message } of relevant) {
     if (sessionPrefix) sessionPrefixes.add(sessionPrefix);
-    console.log("**[" + agent + "]**");
-    console.log("");
-    console.log(message);
-    console.log("");
+    messageLines.push("**[" + agent + "]**");
+    messageLines.push("");
+    messageLines.push(message);
+    messageLines.push("");
   }
   const sessionList = [...sessionPrefixes].map(s => "\\\`./ax.js log " + s + "\\\`").join(" or ");
-  console.log("> For more context: \\\`./ax.js mailbox\\\`" + (sessionList ? " or " + sessionList : ""));
-  writeFileSync(LAST_SEEN, now.toString());
+  messageLines.push("> For more context: \\\`./ax.js mailbox\\\`" + (sessionList ? " or " + sessionList : ""));
+
+  const formattedMessage = messageLines.join("\\n");
+
+  // For Stop hook, return blocking JSON to force acknowledgment
+  if (hookEvent === "Stop") {
+    console.log(JSON.stringify({ decision: "block", reason: formattedMessage }));
+  } else {
+    // For other hooks, just output the context
+    console.log(formattedMessage);
+  }
+
+  // Update last-seen and prune entries older than 24 hours
+  const PRUNE_AGE_MS = 24 * 60 * 60 * 1000;
+  lastSeenMap[sessionHash] = now;
+  for (const key of Object.keys(lastSeenMap)) {
+    if (now - lastSeenMap[key] > PRUNE_AGE_MS) delete lastSeenMap[key];
+  }
+  writeFileSync(LAST_SEEN_FILE, JSON.stringify(lastSeenMap));
 }
 
 process.exit(0);
@@ -2590,18 +2763,9 @@ process.exit(0);
     console.log(`\nTo enable manually, add to .claude/settings.json:\n`);
     console.log(`{
   "hooks": {
-    "UserPromptSubmit": [
-      {
-        "matcher": "",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "node .ai/hooks/mailbox-inject.js",
-            "timeout": 5
-          }
-        ]
-      }
-    ]
+    "UserPromptSubmit": [{ "matcher": "", "hooks": [{ "type": "command", "command": "node .ai/hooks/mailbox-inject.js", "timeout": 5 }] }],
+    "PostToolUse": [{ "matcher": "", "hooks": [{ "type": "command", "command": "node .ai/hooks/mailbox-inject.js", "timeout": 5 }] }],
+    "Stop": [{ "matcher": "", "hooks": [{ "type": "command", "command": "node .ai/hooks/mailbox-inject.js", "timeout": 5 }] }]
   }
 }`);
   }
@@ -2611,6 +2775,7 @@ function ensureClaudeHookConfig() {
   const settingsDir = ".claude";
   const settingsPath = path.join(settingsDir, "settings.json");
   const hookCommand = "node .ai/hooks/mailbox-inject.js";
+  const hookEvents = ["UserPromptSubmit", "PostToolUse", "Stop"];
 
   try {
     /** @type {ClaudeSettings} */
@@ -2629,33 +2794,41 @@ function ensureClaudeHookConfig() {
 
     // Ensure hooks structure exists
     if (!settings.hooks) settings.hooks = {};
-    if (!settings.hooks.UserPromptSubmit) settings.hooks.UserPromptSubmit = [];
 
-    // Check if our hook is already configured
-    const hookExists = settings.hooks.UserPromptSubmit.some(
-      /** @param {{hooks?: Array<{command: string}>}} entry */
-      (entry) => entry.hooks?.some(/** @param {{command: string}} h */ (h) => h.command === hookCommand)
-    );
+    let anyAdded = false;
 
-    if (hookExists) {
-      return true; // Already configured
+    for (const eventName of hookEvents) {
+      if (!settings.hooks[eventName]) settings.hooks[eventName] = [];
+
+      // Check if our hook is already configured for this event
+      const hookExists = settings.hooks[eventName].some(
+        /** @param {{hooks?: Array<{command: string}>}} entry */
+        (entry) =>
+          entry.hooks?.some(/** @param {{command: string}} h */ (h) => h.command === hookCommand),
+      );
+
+      if (!hookExists) {
+        // Add the hook for this event
+        settings.hooks[eventName].push({
+          matcher: "",
+          hooks: [
+            {
+              type: "command",
+              command: hookCommand,
+              timeout: 5,
+            },
+          ],
+        });
+        anyAdded = true;
+      }
     }
 
-    // Add the hook
-    settings.hooks.UserPromptSubmit.push({
-      matcher: "",
-      hooks: [
-        {
-          type: "command",
-          command: hookCommand,
-          timeout: 5,
-        },
-      ],
-    });
+    if (anyAdded) {
+      // Write settings
+      writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + "\n");
+      console.log(`Configured hooks in: ${settingsPath}`);
+    }
 
-    // Write settings
-    writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + "\n");
-    console.log(`Configured hook in: ${settingsPath}`);
     return true;
   } catch {
     // If we can't configure automatically, return false so manual instructions are shown
@@ -2727,7 +2900,9 @@ function cmdAttach(session) {
   }
 
   // Hand over to tmux attach
-  const result = spawnSync("tmux", ["attach", "-t", resolved], { stdio: "inherit" });
+  const result = spawnSync("tmux", ["attach", "-t", resolved], {
+    stdio: "inherit",
+  });
   process.exit(result.status || 0);
 }
 
@@ -2786,13 +2961,15 @@ function cmdLog(sessionName, { tail = 50, reasoning = false, follow = false } = 
 
     if (newLines.length === 0) return;
 
-    const entries = newLines.map((line) => {
-      try {
-        return JSON.parse(line);
-      } catch {
-        return null;
-      }
-    }).filter(Boolean);
+    const entries = newLines
+      .map((line) => {
+        try {
+          return JSON.parse(line);
+        } catch {
+          return null;
+        }
+      })
+      .filter(Boolean);
 
     const output = [];
     if (isInitial) {
@@ -2805,7 +2982,10 @@ function cmdLog(sessionName, { tail = 50, reasoning = false, follow = false } = 
         const ts = entry.timestamp || entry.ts || entry.createdAt;
         if (ts && ts !== lastTimestamp) {
           const date = new Date(ts);
-          const timeStr = date.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" });
+          const timeStr = date.toLocaleTimeString("en-GB", {
+            hour: "2-digit",
+            minute: "2-digit",
+          });
           if (formatted.isUserMessage) {
             output.push(`\n### ${timeStr}\n`);
           }
@@ -2855,7 +3035,10 @@ function formatLogEntry(entry, { reasoning = false } = {}) {
   if (type === "user" || type === "human") {
     const text = extractTextContent(content);
     if (text) {
-      return { text: `**User**: ${truncate(text, TRUNCATE_USER_LEN)}\n`, isUserMessage: true };
+      return {
+        text: `**User**: ${truncate(text, TRUNCATE_USER_LEN)}\n`,
+        isUserMessage: true,
+      };
     }
   }
 
@@ -2871,10 +3054,12 @@ function formatLogEntry(entry, { reasoning = false } = {}) {
     // Extract tool calls (compressed)
     const tools = extractToolCalls(content);
     if (tools.length > 0) {
-      const toolSummary = tools.map((t) => {
-        if (t.error) return `${t.name}(${t.target}) ✗`;
-        return `${t.name}(${t.target})`;
-      }).join(", ");
+      const toolSummary = tools
+        .map((t) => {
+          if (t.error) return `${t.name}(${t.target}) ✗`;
+          return `${t.name}(${t.target})`;
+        })
+        .join(", ");
       parts.push(`> ${toolSummary}\n`);
     }
 
@@ -2896,7 +3081,10 @@ function formatLogEntry(entry, { reasoning = false } = {}) {
     const error = entry.error || entry.is_error;
     if (error) {
       const name = entry.tool_name || entry.name || "tool";
-      return { text: `> ${name} ✗ (${truncate(String(error), 100)})\n`, isUserMessage: false };
+      return {
+        text: `> ${name} ✗ (${truncate(String(error), 100)})\n`,
+        isUserMessage: false,
+      };
     }
   }
 
@@ -2933,7 +3121,8 @@ function extractToolCalls(content) {
       const name = c.name || c.tool || "tool";
       const input = c.input || c.arguments || {};
       // Extract a reasonable target from the input
-      const target = input.file_path || input.path || input.command?.slice(0, 30) || input.pattern || "";
+      const target =
+        input.file_path || input.path || input.command?.slice(0, 30) || input.pattern || "";
       const shortTarget = target.split("/").pop() || target.slice(0, 20);
       return { name, target: shortTarget, error: c.error };
     });
@@ -2978,8 +3167,14 @@ function cmdMailbox({ limit = 20, branch = null, all = false } = {}) {
 
   for (const entry of entries) {
     const ts = new Date(entry.timestamp);
-    const timeStr = ts.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" });
-    const dateStr = ts.toLocaleDateString("en-GB", { month: "short", day: "numeric" });
+    const timeStr = ts.toLocaleTimeString("en-GB", {
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+    const dateStr = ts.toLocaleDateString("en-GB", {
+      month: "short",
+      day: "numeric",
+    });
     const p = entry.payload || {};
 
     console.log(`### [${p.agent || "unknown"}] ${dateStr} ${timeStr}\n`);
@@ -3020,7 +3215,9 @@ async function cmdAsk(agent, session, message, { noWait = false, yolo = false, t
   }
 
   /** @type {string} */
-  const activeSession = sessionExists ? /** @type {string} */ (session) : await cmdStart(agent, session, { yolo });
+  const activeSession = sessionExists
+    ? /** @type {string} */ (session)
+    : await cmdStart(agent, session, { yolo });
 
   tmuxSendLiteral(activeSession, message);
   await sleep(50);
@@ -3121,7 +3318,13 @@ async function cmdReject(agent, session, { wait = false, timeoutMs } = {}) {
  * @param {string | null | undefined} customInstructions
  * @param {{wait?: boolean, yolo?: boolean, fresh?: boolean, timeoutMs?: number}} [options]
  */
-async function cmdReview(agent, session, option, customInstructions, { wait = true, yolo = true, fresh = false, timeoutMs = REVIEW_TIMEOUT_MS } = {}) {
+async function cmdReview(
+  agent,
+  session,
+  option,
+  customInstructions,
+  { wait = true, yolo = true, fresh = false, timeoutMs = REVIEW_TIMEOUT_MS } = {},
+) {
   const sessionExists = session != null && tmuxHasSession(session);
 
   // Reset conversation if --fresh and session exists
@@ -3147,7 +3350,11 @@ async function cmdReview(agent, session, option, customInstructions, { wait = tr
 
   // AX_REVIEW_MODE=exec: bypass /review command, send instructions directly
   if (process.env.AX_REVIEW_MODE === "exec" && option === "custom" && customInstructions) {
-    return cmdAsk(agent, session, customInstructions, { noWait: !wait, yolo, timeoutMs });
+    return cmdAsk(agent, session, customInstructions, {
+      noWait: !wait,
+      yolo,
+      timeoutMs,
+    });
   }
   const nativeYolo = sessionExists && isYoloSession(/** @type {string} */ (session));
 
@@ -3159,7 +3366,9 @@ async function cmdReview(agent, session, option, customInstructions, { wait = tr
   }
 
   /** @type {string} */
-  const activeSession = sessionExists ? /** @type {string} */ (session) : await cmdStart(agent, session, { yolo });
+  const activeSession = sessionExists
+    ? /** @type {string} */ (session)
+    : await cmdStart(agent, session, { yolo });
 
   tmuxSendLiteral(activeSession, "/review");
   await sleep(50);
@@ -3420,7 +3629,7 @@ function getAgentFromInvocation() {
  */
 function printHelp(agent, cliName) {
   const name = cliName;
-  const backendName = agent.name === "codex" ? "OpenAI Codex" : "Claude";
+  const backendName = agent.name === "codex" ? "Codex" : "Claude";
   const hasReview = !!agent.reviewOptions;
 
   console.log(`${name} v${VERSION} - agentic assistant CLI (${backendName})
@@ -3435,8 +3644,12 @@ Commands:
   kill                      Kill sessions in current project (--all for all, --session=NAME for one)
   status                    Check state (exit: 0=ready, 2=rate_limited, 3=confirming, 4=thinking)
   output [-N]               Show response (0=last, -1=prev, -2=older)
-  debug                     Show raw screen output and detected state${hasReview ? `
-  review [TYPE]             Review code: pr, uncommitted, commit, custom` : ""}
+  debug                     Show raw screen output and detected state${
+    hasReview
+      ? `
+  review [TYPE]             Review code: pr, uncommitted, commit, custom`
+      : ""
+  }
   select N                  Select menu option N
   approve                   Approve pending action (send 'y')
   reject                    Reject pending action (send 'n')
@@ -3455,30 +3668,28 @@ Flags:
   --fresh                   Reset conversation before review
 
 Environment:
-  AX_DEFAULT_TOOL             Default agent when using 'ax' (claude or codex, default: codex)
-  ${agent.envVar}             Override default session name
-  AX_CLAUDE_CONFIG_DIR        Override Claude config directory (default: ~/.claude)
-  AX_CODEX_CONFIG_DIR         Override Codex config directory (default: ~/.codex)
-  AX_REVIEW_MODE=exec         Bypass /review, send instructions directly (codex only)
-  AX_DEBUG=1                  Enable debug logging
+  AX_DEFAULT_TOOL           Default agent when using 'ax' (claude or codex, default: codex)
+  ${agent.envVar}           Override default session name
+  AX_CLAUDE_CONFIG_DIR      Override Claude config directory (default: ~/.claude)
+  AX_CODEX_CONFIG_DIR       Override Codex config directory (default: ~/.codex)
+  AX_REVIEW_MODE=exec       Bypass /review, send instructions directly (codex only)
+  AX_DEBUG=1                Enable debug logging
 
 Examples:
-  ./${name}.js "explain this codebase"
-  ./${name}.js "please review the error handling"   # Auto custom review
-  ./${name}.js review uncommitted --wait
-  ./${name}.js approve --wait
-  ./${name}.js kill                       # Kill agents in current project
-  ./${name}.js kill --all                 # Kill all agents across all projects
-  ./${name}.js kill --session=NAME        # Kill specific session
-  ./${name}.js send "1[Enter]"            # Recovery: select option 1 and press Enter
-  ./${name}.js send "[Escape][Escape]"    # Recovery: escape out of a dialog
-
-Archangels:
-  ./${name}.js summon                     # Summon all archangels from .ai/agents/*.md
-  ./${name}.js summon reviewer            # Summon by name (creates config if new)
-  ./${name}.js recall                     # Recall all archangels
-  ./${name}.js recall reviewer            # Recall one by name
-  ./${name}.js agents                     # List all agents (shows TYPE=archangel)`);
+  ${name} "explain this codebase"
+  ${name} "please review the error handling"   # Auto custom review
+  ${name} review uncommitted --wait
+  ${name} approve --wait
+  ${name} kill                                 # Kill agents in current project
+  ${name} kill --all                           # Kill all agents across all projects
+  ${name} kill --session=NAME                  # Kill specific session
+  ${name} send "1[Enter]"                      # Recovery: select option 1 and press Enter
+  ${name} send "[Escape][Escape]"              # Recovery: escape out of a dialog
+  ${name} summon                               # Summon all archangels from .ai/agents/*.md
+  ${name} summon reviewer                      # Summon by name (creates config if new)
+  ${name} recall                               # Recall all archangels
+  ${name} recall reviewer                      # Recall one by name
+  ${name} agents                               # List all agents (shows TYPE=archangel)`);
 }
 
 async function main() {
@@ -3582,7 +3793,7 @@ async function main() {
       !a.startsWith("--tool") &&
       !a.startsWith("--tail") &&
       !a.startsWith("--limit") &&
-      !a.startsWith("--branch")
+      !a.startsWith("--branch"),
   );
   const cmd = filteredArgs[0];
 
@@ -3597,7 +3808,13 @@ async function main() {
   if (cmd === "mailbox") return cmdMailbox({ limit, branch, all });
   if (cmd === "approve") return cmdApprove(agent, session, { wait, timeoutMs });
   if (cmd === "reject") return cmdReject(agent, session, { wait, timeoutMs });
-  if (cmd === "review") return cmdReview(agent, session, filteredArgs[1], filteredArgs[2], { wait, yolo, fresh, timeoutMs });
+  if (cmd === "review")
+    return cmdReview(agent, session, filteredArgs[1], filteredArgs[2], {
+      wait,
+      yolo,
+      fresh,
+      timeoutMs,
+    });
   if (cmd === "status") return cmdStatus(agent, session);
   if (cmd === "debug") return cmdDebug(agent, session);
   if (cmd === "output") {
@@ -3605,10 +3822,12 @@ async function main() {
     const index = indexArg?.startsWith("-") ? parseInt(indexArg, 10) : 0;
     return cmdOutput(agent, session, index, { wait, timeoutMs });
   }
-  if (cmd === "send" && filteredArgs.length > 1) return cmdSend(session, filteredArgs.slice(1).join(" "));
+  if (cmd === "send" && filteredArgs.length > 1)
+    return cmdSend(session, filteredArgs.slice(1).join(" "));
   if (cmd === "compact") return cmdAsk(agent, session, "/compact", { noWait: true, timeoutMs });
   if (cmd === "reset") return cmdAsk(agent, session, "/new", { noWait: true, timeoutMs });
-  if (cmd === "select" && filteredArgs[1]) return cmdSelect(agent, session, filteredArgs[1], { wait, timeoutMs });
+  if (cmd === "select" && filteredArgs[1])
+    return cmdSelect(agent, session, filteredArgs[1], { wait, timeoutMs });
 
   // Default: send message
   let message = filteredArgs.join(" ");
@@ -3625,7 +3844,11 @@ async function main() {
   const reviewMatch = message.match(/^please review\s*(.*)/i);
   if (reviewMatch && agent.reviewOptions) {
     const customInstructions = reviewMatch[1].trim() || null;
-    return cmdReview(agent, session, "custom", customInstructions, { wait: !noWait, yolo, timeoutMs });
+    return cmdReview(agent, session, "custom", customInstructions, {
+      wait: !noWait,
+      yolo,
+      timeoutMs,
+    });
   }
 
   return cmdAsk(agent, session, message, { noWait, yolo, timeoutMs });
@@ -3633,13 +3856,15 @@ async function main() {
 
 // Run main() only when executed directly (not when imported for testing)
 // Use realpathSync to handle symlinks (e.g., axclaude, axcodex bin entries)
-const isDirectRun = process.argv[1] && (() => {
-  try {
-    return realpathSync(process.argv[1]) === __filename;
-  } catch {
-    return false;
-  }
-})();
+const isDirectRun =
+  process.argv[1] &&
+  (() => {
+    try {
+      return realpathSync(process.argv[1]) === __filename;
+    } catch {
+      return false;
+    }
+  })();
 if (isDirectRun) {
   main().catch((err) => {
     console.log(`ERROR: ${err.message}`);
@@ -3663,4 +3888,3 @@ export {
   detectState,
   State,
 };
-
