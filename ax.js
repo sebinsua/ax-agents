@@ -307,6 +307,7 @@ const ARCHANGEL_GIT_CONTEXT_MAX_LINES = 200;
 const ARCHANGEL_PARENT_CONTEXT_ENTRIES = 10;
 const ARCHANGEL_PREAMBLE = `## Guidelines
 
+- If you have nothing to report, you MUST respond with ONLY "EMPTY_RESPONSE".
 - Investigate before speaking. If uncertain, read more code and trace the logic until you're confident.
 - Explain WHY something is an issue, not just that it is.
 - Focus on your area of expertise.
@@ -314,9 +315,7 @@ const ARCHANGEL_PREAMBLE = `## Guidelines
 - Be clear. Brief is fine, but never sacrifice clarity.
 - For critical issues, request for them to be added to the todo list.
 - Don't repeat observations you've already made unless you have more to say or better clarity.
-- Make judgment calls - don't ask questions.
-
-"No issues found." is a valid response when there's nothing significant to report.`;
+- Make judgment calls - don't ask questions.`;
 
 /**
  * @param {string} session
@@ -2959,28 +2958,18 @@ async function cmdArchangel(agentName) {
 
       const cleanedResponse = agent.getResponse(sessionName, afterScreen) || "";
 
-      // Sanity check: skip garbage responses (screen scraping artifacts)
-      const isGarbage =
-        cleanedResponse.includes("[Pasted text") ||
-        cleanedResponse.match(/^\+\d+ lines\]/) ||
-        cleanedResponse.length < 20;
+      const isSkippable = !cleanedResponse || cleanedResponse.trim() === "EMPTY_RESPONSE";
 
-      if (
-        cleanedResponse &&
-        !isGarbage &&
-        !cleanedResponse.toLowerCase().includes("no issues found")
-      ) {
+      if (!isSkippable) {
         writeToMailbox({
           agent: /** @type {string} */ (agentName),
           session: sessionName,
           branch: getCurrentBranch(),
           commit: getCurrentCommit(),
           files,
-          message: cleanedResponse.slice(0, 1000),
+          message: cleanedResponse,
         });
         console.log(`[archangel:${agentName}] Wrote observation for ${files.length} file(s)`);
-      } else if (isGarbage) {
-        console.log(`[archangel:${agentName}] Skipped garbage response`);
       }
     } catch (err) {
       console.error(`[archangel:${agentName}] Error:`, err instanceof Error ? err.message : err);
