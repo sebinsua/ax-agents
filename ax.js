@@ -3725,6 +3725,8 @@ function printHelp(agent, cliName) {
 
   console.log(`${name} v${VERSION} - agentic assistant CLI (${backendName})
 
+Usage: ${name} [OPTIONS] <command|message> [ARGS...]
+
 Commands:
   agents                    List all running agents with state and log paths
   attach [SESSION]          Attach to agent session interactively
