@@ -1852,7 +1852,22 @@ function detectState(screen, config) {
     }
   }
 
-  // Thinking - spinners (check last lines only to avoid false positives from timing messages like "✻ Crunched for 32s")
+  // Ready - check BEFORE thinking to avoid false positives from timing messages like "✻ Worked for 45s"
+  // If the prompt symbol is visible, the agent is ready regardless of spinner characters in timing messages
+  if (lastLines.includes(config.promptSymbol)) {
+    // Check if any line has the prompt followed by pasted content indicator
+    // "[Pasted text" indicates user has pasted content and Claude is still processing
+    const linesArray = lastLines.split("\n");
+    const promptWithPaste = linesArray.some(
+      (l) => l.includes(config.promptSymbol) && l.includes("[Pasted text"),
+    );
+    if (!promptWithPaste) {
+      return State.READY;
+    }
+    // If prompt has pasted content, Claude is still processing - not ready yet
+  }
+
+  // Thinking - spinners (check last lines only)
   const spinners = config.spinners || [];
   if (spinners.some((s) => lastLines.includes(s))) {
     return State.THINKING;
@@ -1875,20 +1890,6 @@ function detectState(screen, config) {
     if (sp && sp.some((p) => screen.includes(p)) && lp && lp.some((p) => lastLines.includes(p))) {
       return State.UPDATE_PROMPT;
     }
-  }
-
-  // Ready - only if prompt symbol is visible AND not followed by pasted content
-  // "[Pasted text" indicates user has pasted content and Claude is still processing
-  if (lastLines.includes(config.promptSymbol)) {
-    // Check if any line has the prompt followed by pasted content indicator
-    const linesArray = lastLines.split("\n");
-    const promptWithPaste = linesArray.some(
-      (l) => l.includes(config.promptSymbol) && l.includes("[Pasted text"),
-    );
-    if (!promptWithPaste) {
-      return State.READY;
-    }
-    // If prompt has pasted content, Claude is still processing - not ready yet
   }
 
   return State.STARTING;
@@ -4161,20 +4162,43 @@ async function cmdSelect(agent, session, n, { wait = false, timeoutMs } = {}) {
 // =============================================================================
 
 /**
- * @returns {Agent}
+ * Resolve the agent to use based on (in priority order):
+ * 1. Explicit --tool flag
+ * 2. Session name (e.g., "claude-archangel-..." → ClaudeAgent)
+ * 3. CLI invocation name (axclaude, axcodex)
+ * 4. AX_DEFAULT_TOOL environment variable
+ * 5. Default to CodexAgent
+ *
+ * @param {{toolFlag?: string, sessionName?: string | null}} options
+ * @returns {{agent: Agent, error?: string}}
  */
-function getAgentFromInvocation() {
-  const invoked = path.basename(process.argv[1], ".js");
-  if (invoked === "axclaude" || invoked === "claude") return ClaudeAgent;
-  if (invoked === "axcodex" || invoked === "codex") return CodexAgent;
+function resolveAgent({ toolFlag, sessionName } = {}) {
+  // 1. Explicit --tool flag takes highest priority
+  if (toolFlag) {
+    if (toolFlag === "claude") return { agent: ClaudeAgent };
+    if (toolFlag === "codex") return { agent: CodexAgent };
+    return { agent: CodexAgent, error: `unknown tool '${toolFlag}'` };
+  }
 
-  // Default based on AX_DEFAULT_TOOL env var, or codex if not set
+  // 2. Infer from session name (e.g., "claude-archangel-..." or "codex-partner-...")
+  if (sessionName) {
+    const parsed = parseSessionName(sessionName);
+    if (parsed?.tool === "claude") return { agent: ClaudeAgent };
+    if (parsed?.tool === "codex") return { agent: CodexAgent };
+  }
+
+  // 3. CLI invocation name
+  const invoked = path.basename(process.argv[1], ".js");
+  if (invoked === "axclaude" || invoked === "claude") return { agent: ClaudeAgent };
+  if (invoked === "axcodex" || invoked === "codex") return { agent: CodexAgent };
+
+  // 4. AX_DEFAULT_TOOL environment variable
   const defaultTool = process.env.AX_DEFAULT_TOOL;
-  if (defaultTool === "claude") return ClaudeAgent;
-  if (defaultTool === "codex" || !defaultTool) return CodexAgent;
+  if (defaultTool === "claude") return { agent: ClaudeAgent };
+  if (defaultTool === "codex" || !defaultTool) return { agent: CodexAgent };
 
   console.error(`WARNING: invalid AX_DEFAULT_TOOL="${defaultTool}", using codex`);
-  return CodexAgent;
+  return { agent: CodexAgent };
 }
 
 /**
@@ -4278,19 +4302,8 @@ async function main() {
   // Extract flags into local variables for convenience
   const { wait, noWait, yolo, fresh, reasoning, follow, all, orphans, force } = flags;
 
-  // Agent selection
-  let agent = getAgentFromInvocation();
-  if (flags.tool) {
-    if (flags.tool === "claude") agent = ClaudeAgent;
-    else if (flags.tool === "codex") agent = CodexAgent;
-    else {
-      console.log(`ERROR: unknown tool '${flags.tool}'`);
-      process.exit(1);
-    }
-  }
-
-  // Session resolution
-  let session = agent.getDefaultSession();
+  // Session resolution (must happen before agent resolution so we can infer tool from session name)
+  let session = null;
   if (flags.session) {
     if (flags.session === "self") {
       const current = tmuxCurrentSession();
@@ -4303,6 +4316,18 @@ async function main() {
       // Resolve partial names, archangel names, and UUID prefixes
       session = resolveSessionName(flags.session);
     }
+  }
+
+  // Agent resolution (considers --tool flag, session name, invocation, and env vars)
+  const { agent, error: agentError } = resolveAgent({ toolFlag: flags.tool, sessionName: session });
+  if (agentError) {
+    console.log(`ERROR: ${agentError}`);
+    process.exit(1);
+  }
+
+  // If no explicit session, use agent's default
+  if (!session) {
+    session = agent.getDefaultSession();
   }
 
   // Timeout (convert seconds to milliseconds)

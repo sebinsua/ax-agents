@@ -554,13 +554,11 @@ Some status`;
     });
 
     it("detects thinking from text pattern (Claude)", () => {
+      // No prompt symbol - agent is actively thinking
       const screen = `Some context
 
-Thinking
-
-❯ `;
-      // Note: Thinking in last lines takes precedence, but spinner check comes first
-      // This tests the thinkingPatterns check
+Thinking`;
+      // This tests the thinkingPatterns check (spinners disabled)
       const configNoSpinners = { ...claudeConfig, spinners: [] };
       assert.strictEqual(detectState(screen, configNoSpinners), State.THINKING);
     });
@@ -687,6 +685,17 @@ Do you want to proceed?
       const screen = `Do you want to proceed?
 ❯ `;
       assert.strictEqual(detectState(screen, claudeConfig), State.CONFIRMING);
+    });
+
+    it("ready beats thinking when prompt visible (spinner in timing message)", () => {
+      // Real scenario: Claude shows "✻ Worked for 45s" timing message after completing
+      // The ✻ character is a spinner, but the prompt ❯ is visible so it's ready
+      const screen = `Want me to remove this item from TODO.md?
+
+✻ Worked for 45s
+
+❯ `;
+      assert.strictEqual(detectState(screen, claudeConfig), State.READY);
     });
   });
 });
