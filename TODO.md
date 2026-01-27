@@ -26,41 +26,7 @@ ax approve --session=xxx   # ERROR: not confirming (state changed)
 
 ## DX Improvements
 
-### 2. Session confusion - unclear which session is targeted (P1)
-
-**Problem:** When you run `ax "message"`, it's unclear which session receives it. Default session selection is implicit.
-
-**Symptoms:**
-- Sent message, couldn't find which session got it
-- Had to grep through multiple session logs
-
-**Fix:** Add a `TARGET` column to `ax agents` output:
-
-```
-SESSION                                   TOOL    STATE   TARGET  TYPE  LOG
-claude-partner-39ef854c-...               claude  ready           -     ...
-claude-partner-497d7a9d-...               claude  ready   *       -     ...
-codex-partner-abc123-...                  codex   ready   *       -     ...
-```
-
-The `*` marker shows which session each agent type (claude/codex) will target by default.
-
-**Implementation (`cmdAgents`):**
-
-1. For each agent type, call `agent.getDefaultSession()` to get the default session name
-2. When printing rows, add `*` to the TARGET column if session matches that agent's default
-3. Note: there may be one default per agent type (one for claude, one for codex)
-
-**How `getDefaultSession()` works (line 1625):**
-1. Environment variable (e.g., `AX_SESSION`)
-2. CWD matching - finds existing session with same working directory
-3. Process parent chain walking + CWD matching
-
-Note: `findParentSession()` is separate and only used by archangels.
-
----
-
-### 3. Timeout debugging is opaque (P2)
+### 2. Timeout debugging is opaque (P2)
 
 **Problem:** When timeout occurs, no information about what was happening:
 - Was the agent stuck thinking?
@@ -77,7 +43,7 @@ Hint: Try ax debug --session=xxx to see current screen
 
 ---
 
-### 4. Help text should show actual default values (P1)
+### 3. Help text should show actual default values (P1)
 
 **File:** `ax.js` help output / `printHelp()`
 
@@ -97,7 +63,7 @@ This keeps help text in sync with code and makes defaults discoverable.
 
 ---
 
-### 5. No streaming output during long-running commands (P1)
+### 4. No streaming output during long-running commands (P1)
 
 **Files:** `ax.js:2016-2052` (waitForResponse), `ax.js:2062-2085` (autoApproveLoop)
 
@@ -176,7 +142,7 @@ The plan has several strong points...
 
 ---
 
-### 6. Clarify `--no-wait` vs backgrounding in help text (P2)
+### 5. Clarify `--no-wait` vs backgrounding in help text (P2)
 
 **Problem:** LLMs might see `--no-wait` and think it's for backgrounding tasks. It's not - it's fire-and-forget. This causes confusion.
 
@@ -192,7 +158,7 @@ The plan has several strong points...
 
 2. **Backgrounding (Ctrl+B in Claude Code)**: Command keeps running, output streams to task file, notification on completion
    - This already works - `ax` is just a CLI
-   - But requires #5 (streaming) so output appears incrementally, not buffered until end
+   - But requires #4 (streaming) so output appears incrementally, not buffered until end
 
 **Fixes:**
 
@@ -212,10 +178,10 @@ The plan has several strong points...
    ax review pr --wait            # May take 5-15 minutes; consider backgrounding
    ```
 
-**Why this matters:** With #5 (streaming) fixed, backgrounded commands will incrementally write output to the task file, giving visibility into progress. The default for LLMs should be to background long tasks, not block.
+**Why this matters:** With #4 (streaming) fixed, backgrounded commands will incrementally write output to the task file, giving visibility into progress. The default for LLMs should be to background long tasks, not block.
 
 **Dependencies:**
-- #5 should be fixed (so backgrounded commands stream output properly)
+- #4 should be fixed (so backgrounded commands stream output properly)
 
 ---
 

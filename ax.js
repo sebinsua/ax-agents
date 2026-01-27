@@ -2219,6 +2219,10 @@ function cmdAgents() {
     return;
   }
 
+  // Get default session for each agent type
+  const claudeDefault = ClaudeAgent.getDefaultSession();
+  const codexDefault = CodexAgent.getDefaultSession();
+
   // Get info for each agent
   const agents = agentSessions.map((session) => {
     const parsed = /** @type {ParsedSession} */ (parseSessionName(session));
@@ -2227,11 +2231,15 @@ function cmdAgents() {
     const state = agent.getState(screen);
     const logPath = agent.findLogPath(session);
     const type = parsed.archangelName ? "archangel" : "-";
+    const isDefault =
+      (parsed.tool === "claude" && session === claudeDefault) ||
+      (parsed.tool === "codex" && session === codexDefault);
 
     return {
       session,
       tool: parsed.tool,
       state: state || "unknown",
+      target: isDefault ? "*" : "",
       type,
       log: logPath || "-",
     };
@@ -2241,14 +2249,15 @@ function cmdAgents() {
   const maxSession = Math.max(7, ...agents.map((a) => a.session.length));
   const maxTool = Math.max(4, ...agents.map((a) => a.tool.length));
   const maxState = Math.max(5, ...agents.map((a) => a.state.length));
+  const maxTarget = Math.max(6, ...agents.map((a) => a.target.length));
   const maxType = Math.max(4, ...agents.map((a) => a.type.length));
 
   console.log(
-    `${"SESSION".padEnd(maxSession)}  ${"TOOL".padEnd(maxTool)}  ${"STATE".padEnd(maxState)}  ${"TYPE".padEnd(maxType)}  LOG`,
+    `${"SESSION".padEnd(maxSession)}  ${"TOOL".padEnd(maxTool)}  ${"STATE".padEnd(maxState)}  ${"TARGET".padEnd(maxTarget)}  ${"TYPE".padEnd(maxType)}  LOG`,
   );
   for (const a of agents) {
     console.log(
-      `${a.session.padEnd(maxSession)}  ${a.tool.padEnd(maxTool)}  ${a.state.padEnd(maxState)}  ${a.type.padEnd(maxType)}  ${a.log}`,
+      `${a.session.padEnd(maxSession)}  ${a.tool.padEnd(maxTool)}  ${a.state.padEnd(maxState)}  ${a.target.padEnd(maxTarget)}  ${a.type.padEnd(maxType)}  ${a.log}`,
     );
   }
 }
@@ -3729,6 +3738,7 @@ Usage: ${name} [OPTIONS] <command|message> [ARGS...]
 
 Commands:
   agents                    List all running agents with state and log paths
+  target                    Show default target session for current tool
   attach [SESSION]          Attach to agent session interactively
   log SESSION               View conversation log (--tail=N, --follow, --reasoning)
   mailbox                   View archangel observations (--limit=N, --branch=X, --all)
@@ -3859,6 +3869,16 @@ async function main() {
 
   // Dispatch commands
   if (cmd === "agents") return cmdAgents();
+  if (cmd === "target") {
+    const defaultSession = agent.getDefaultSession();
+    if (defaultSession) {
+      console.log(defaultSession);
+    } else {
+      console.log("NO_TARGET");
+      process.exit(1);
+    }
+    return;
+  }
   if (cmd === "summon") return cmdSummon(positionals[1]);
   if (cmd === "recall") return cmdRecall(positionals[1]);
   if (cmd === "archangel") return cmdArchangel(positionals[1]);
