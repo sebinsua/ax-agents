@@ -347,6 +347,38 @@ function findCallerPid() {
   return null;
 }
 
+/**
+ * Find orphaned claude/codex processes (PPID=1, reparented to init/launchd)
+ * @returns {{pid: string, command: string}[]}
+ */
+function findOrphanedProcesses() {
+  const result = spawnSync("ps", ["-eo", "pid=,ppid=,args="], { encoding: "utf-8" });
+
+  if (result.status !== 0 || !result.stdout.trim()) {
+    return [];
+  }
+
+  const orphans = [];
+  for (const line of result.stdout.trim().split("\n")) {
+    // Parse: "  PID  PPID  command args..."
+    const match = line.match(/^\s*(\d+)\s+(\d+)\s+(.+)$/);
+    if (!match) continue;
+
+    const [, pid, ppid, args] = match;
+
+    // Must have PPID=1 (orphaned/reparented to init)
+    if (ppid !== "1") continue;
+
+    // Command must START with claude or codex (excludes tmux which also has PPID=1)
+    const cmd = args.split(/\s+/)[0];
+    if (cmd !== "claude" && cmd !== "codex") continue;
+
+    orphans.push({ pid, command: args.slice(0, 60) });
+  }
+
+  return orphans;
+}
+
 // =============================================================================
 // Helpers - stdin
 // =============================================================================
@@ -392,6 +424,8 @@ async function readStdin() {
  * @property {boolean} reasoning
  * @property {boolean} follow
  * @property {boolean} all
+ * @property {boolean} orphans
+ * @property {boolean} force
  * @property {boolean} version
  * @property {boolean} help
  * @property {string} [tool]
@@ -413,6 +447,8 @@ function parseCliArgs(args) {
       reasoning: { type: "boolean", default: false },
       follow: { type: "boolean", short: "f", default: false },
       all: { type: "boolean", default: false },
+      orphans: { type: "boolean", default: false },
+      force: { type: "boolean", default: false },
       version: { type: "boolean", short: "V", default: false },
       help: { type: "boolean", short: "h", default: false },
       // Value flags
@@ -436,6 +472,8 @@ function parseCliArgs(args) {
       reasoning: values.reasoning,
       follow: values.follow,
       all: values.all,
+      orphans: values.orphans,
+      force: values.force,
       version: values.version,
       help: values.help,
       tool: values.tool,
@@ -2396,6 +2434,15 @@ function cmdAgents() {
 
   if (agentSessions.length === 0) {
     console.log("No agents running");
+    // Still check for orphans
+    const orphans = findOrphanedProcesses();
+    if (orphans.length > 0) {
+      console.log(`\nOrphaned (${orphans.length}):`);
+      for (const { pid, command } of orphans) {
+        console.log(`  PID ${pid}: ${command}`);
+      }
+      console.log(`\n  Run 'ax kill --orphans' to clean up`);
+    }
     return;
   }
 
@@ -2425,7 +2472,7 @@ function cmdAgents() {
     };
   });
 
-  // Print table
+  // Print sessions table
   const maxSession = Math.max(7, ...agents.map((a) => a.session.length));
   const maxTool = Math.max(4, ...agents.map((a) => a.tool.length));
   const maxState = Math.max(5, ...agents.map((a) => a.state.length));
@@ -2439,6 +2486,16 @@ function cmdAgents() {
     console.log(
       `${a.session.padEnd(maxSession)}  ${a.tool.padEnd(maxTool)}  ${a.state.padEnd(maxState)}  ${a.target.padEnd(maxTarget)}  ${a.type.padEnd(maxType)}  ${a.log}`,
     );
+  }
+
+  // Print orphaned processes if any
+  const orphans = findOrphanedProcesses();
+  if (orphans.length > 0) {
+    console.log(`\nOrphaned (${orphans.length}):`);
+    for (const { pid, command } of orphans) {
+      console.log(`  PID ${pid}: ${command}`);
+    }
+    console.log(`\n  Run 'ax kill --orphans' to clean up`);
   }
 }
 
@@ -3102,9 +3159,31 @@ function ensureClaudeHookConfig() {
 
 /**
  * @param {string | null | undefined} session
- * @param {{all?: boolean}} [options]
+ * @param {{all?: boolean, orphans?: boolean, force?: boolean}} [options]
  */
-function cmdKill(session, { all = false } = {}) {
+function cmdKill(session, { all = false, orphans = false, force = false } = {}) {
+  // Handle orphaned processes
+  if (orphans) {
+    const orphanedProcesses = findOrphanedProcesses();
+
+    if (orphanedProcesses.length === 0) {
+      console.log("No orphaned processes found");
+      return;
+    }
+
+    const signal = force ? "-9" : "-15"; // SIGKILL vs SIGTERM
+    let killed = 0;
+    for (const { pid, command } of orphanedProcesses) {
+      const result = spawnSync("kill", [signal, pid]);
+      if (result.status === 0) {
+        console.log(`Killed: PID ${pid} (${command.slice(0, 40)})`);
+        killed++;
+      }
+    }
+    console.log(`Killed ${killed} orphaned process(es)${force ? " (forced)" : ""}`);
+    return;
+  }
+
   // If specific session provided, kill just that one
   if (session) {
     if (!tmuxHasSession(session)) {
@@ -3914,7 +3993,7 @@ Commands:
   mailbox                   View archangel observations (--limit=N, --branch=X, --all)
   summon [name]             Summon archangels (all, or by name)
   recall [name]             Recall archangels (all, or by name)
-  kill                      Kill sessions in current project (--all for all, --session=NAME for one)
+  kill                      Kill sessions (--all, --session=NAME, --orphans [--force])
   status                    Check state (exit: 0=ready, 2=rate_limited, 3=confirming, 4=thinking)
   output [-N]               Show response (0=last, -1=prev, -2=older)
   debug                     Show raw screen output and detected state${
@@ -3939,6 +4018,8 @@ Flags:
   --timeout=N               Set timeout in seconds (default: ${DEFAULT_TIMEOUT_MS / 1000}, reviews: ${REVIEW_TIMEOUT_MS / 1000})
   --yolo                    Skip all confirmations (dangerous)
   --fresh                   Reset conversation before review
+  --orphans                 Kill orphaned claude/codex processes (PPID=1)
+  --force                   Use SIGKILL instead of SIGTERM (with --orphans)
 
 Environment:
   AX_DEFAULT_TOOL           Default agent when using 'ax' (claude or codex, default: codex)
@@ -3986,7 +4067,7 @@ async function main() {
   }
 
   // Extract flags into local variables for convenience
-  const { wait, noWait, yolo, fresh, reasoning, follow, all } = flags;
+  const { wait, noWait, yolo, fresh, reasoning, follow, all, orphans, force } = flags;
 
   // Agent selection
   let agent = getAgentFromInvocation();
@@ -4052,7 +4133,7 @@ async function main() {
   if (cmd === "summon") return cmdSummon(positionals[1]);
   if (cmd === "recall") return cmdRecall(positionals[1]);
   if (cmd === "archangel") return cmdArchangel(positionals[1]);
-  if (cmd === "kill") return cmdKill(session, { all });
+  if (cmd === "kill") return cmdKill(session, { all, orphans, force });
   if (cmd === "attach") return cmdAttach(positionals[1] || session);
   if (cmd === "log") return cmdLog(positionals[1] || session, { tail, reasoning, follow });
   if (cmd === "mailbox") return cmdMailbox({ limit, branch, all });
