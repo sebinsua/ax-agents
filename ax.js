@@ -353,9 +353,9 @@ async function waitFor(session, predicate, timeoutMs = STARTUP_TIMEOUT_MS) {
 // =============================================================================
 
 /**
- * @returns {number | null}
+ * @returns {{pid: number, agent: 'claude' | 'codex'} | null}
  */
-function findCallerPid() {
+function findCallerAgent() {
   let pid = process.ppid;
   while (pid > 1) {
     const result = spawnSync("ps", ["-p", pid.toString(), "-o", "ppid=,comm="], {
@@ -365,9 +365,8 @@ function findCallerPid() {
     const parts = result.stdout.trim().split(/\s+/);
     const ppid = parseInt(parts[0], 10);
     const cmd = parts.slice(1).join(" ");
-    if (cmd.includes("claude") || cmd.includes("codex")) {
-      return pid;
-    }
+    if (cmd.includes("claude")) return { pid, agent: "claude" };
+    if (cmd.includes("codex")) return { pid, agent: "codex" };
     pid = ppid;
   }
   return null;
@@ -1396,8 +1395,8 @@ function findCurrentClaudeSession() {
 
   // We might be running from Claude but not inside tmux (e.g., VSCode, Cursor)
   // Find Claude sessions in the same cwd and pick the most recently active one
-  const callerPid = findCallerPid();
-  if (!callerPid) return null; // Not running from Claude
+  const caller = findCallerAgent();
+  if (!caller) return null;
 
   const cwd = process.cwd();
   const sessions = tmuxListSessions();
@@ -2025,8 +2024,8 @@ class Agent {
     }
 
     // Walk up to find claude/codex ancestor and reuse its session (must match cwd)
-    const callerPid = findCallerPid();
-    if (callerPid) {
+    const caller = findCallerAgent();
+    if (caller) {
       const sessions = tmuxListSessions();
       const existing = sessions.find((s) => {
         if (!childPattern.test(s)) return false;
@@ -3161,12 +3160,22 @@ import { readFileSync, writeFileSync, existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createHash } from "node:crypto";
+import { execSync } from "node:child_process";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const AI_DIR = join(__dirname, "..");
 const DEBUG = process.env.AX_DEBUG === "1";
 const MAILBOX = join(AI_DIR, "mailbox.jsonl");
 const MAX_AGE_MS = 60 * 60 * 1000;
+
+function getTmuxSessionName() {
+  if (!process.env.TMUX) return null;
+  try {
+    return execSync("tmux display-message -p '#S'", { encoding: "utf-8" }).trim();
+  } catch {
+    return null;
+  }
+}
 
 // Read hook input from stdin
 let hookInput = {};
@@ -3182,8 +3191,9 @@ const hookEvent = hookInput.hook_event_name || "";
 
 if (DEBUG) console.error("[hook] session:", sessionId, "event:", hookEvent);
 
-// NO-OP for archangel or partner sessions
-if (sessionId.includes("-archangel-") || sessionId.includes("-partner-")) {
+const tmuxSession = getTmuxSessionName();
+if (DEBUG) console.error("[hook] tmux session:", tmuxSession);
+if (tmuxSession && (tmuxSession.includes("-archangel-") || tmuxSession.includes("-partner-"))) {
   if (DEBUG) console.error("[hook] skipping non-parent session");
   process.exit(0);
 }
@@ -4181,7 +4191,12 @@ function resolveAgent({ toolFlag, sessionName } = {}) {
   if (invoked === "axclaude" || invoked === "claude") return { agent: ClaudeAgent };
   if (invoked === "axcodex" || invoked === "codex") return { agent: CodexAgent };
 
-  // 4. AX_DEFAULT_TOOL environment variable
+  // 4. Infer from parent process (running from within claude/codex)
+  const caller = findCallerAgent();
+  if (caller?.agent === "claude") return { agent: ClaudeAgent };
+  if (caller?.agent === "codex") return { agent: CodexAgent };
+
+  // 5. AX_DEFAULT_TOOL environment variable
   const defaultTool = process.env.AX_DEFAULT_TOOL;
   if (defaultTool === "claude") return { agent: ClaudeAgent };
   if (defaultTool === "codex" || !defaultTool) return { agent: CodexAgent };
