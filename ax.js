@@ -312,6 +312,15 @@ const ARCHANGEL_PARENT_CONTEXT_ENTRIES = 10;
  * @param {number} [timeoutMs]
  * @returns {Promise<string>}
  */
+class TimeoutError extends Error {
+  /** @param {string} [session] */
+  constructor(session) {
+    super("timeout");
+    this.name = "TimeoutError";
+    this.session = session;
+  }
+}
+
 async function waitFor(session, predicate, timeoutMs = STARTUP_TIMEOUT_MS) {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
@@ -319,7 +328,7 @@ async function waitFor(session, predicate, timeoutMs = STARTUP_TIMEOUT_MS) {
     if (predicate(screen)) return screen;
     await sleep(POLL_MS);
   }
-  throw new Error("timeout");
+  throw new TimeoutError(session);
 }
 
 // =============================================================================
@@ -2227,7 +2236,7 @@ async function waitUntilReady(agent, session, timeoutMs = DEFAULT_TIMEOUT_MS) {
       return { state, screen };
     }
   }
-  throw new Error("timeout");
+  throw new TimeoutError(session);
 }
 
 /**
@@ -2284,7 +2293,7 @@ async function pollForResponse(agent, session, timeoutMs, hooks = {}) {
 
     await sleep(POLL_MS);
   }
-  throw new Error("timeout");
+  throw new TimeoutError(session);
 }
 
 /**
@@ -2375,7 +2384,7 @@ async function autoApproveLoop(agent, session, timeoutMs, waitFn) {
     debugError("autoApproveLoop", new Error(`unexpected state: ${state}`));
   }
 
-  throw new Error("timeout");
+  throw new TimeoutError(session);
 }
 
 /**
@@ -4198,6 +4207,9 @@ const isDirectRun =
 if (isDirectRun) {
   main().catch((err) => {
     console.log(`ERROR: ${err.message}`);
+    if (err instanceof TimeoutError && err.session) {
+      console.log(`Hint: Use 'ax debug --session=${err.session}' to see current screen state`);
+    }
     process.exit(1);
   });
 }
