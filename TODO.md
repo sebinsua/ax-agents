@@ -24,34 +24,9 @@ ax approve --session=xxx   # ERROR: not confirming (state changed)
 
 ---
 
-### 2. Silent output when state is READY (P1)
-
-**Files:** `ax.js:3461-3481` (cmdStatus), `ax.js:3420-3450` (cmdOutput)
-
-**Problem:** When state is READY, these commands print nothing and exit 0. Confusing for interactive use.
-
-```bash
-ax status --session=xxx   # (No content) - Did it work? What state?
-ax output --session=xxx   # (No content) - Is there no output?
-```
-
-**Fix:** Always print something:
-```javascript
-// cmdStatus
-if (state === State.READY) {
-  console.log("READY");
-  process.exit(0);
-}
-
-// cmdOutput - if no output found
-console.log("(No response yet)");
-```
-
----
-
 ## DX Improvements
 
-### 3. Session confusion - unclear which session is targeted (P1)
+### 2. Session confusion - unclear which session is targeted (P1)
 
 **Problem:** When you run `ax "message"`, it's unclear which session receives it. Default session selection is implicit.
 
@@ -85,7 +60,7 @@ Note: `findParentSession()` is separate and only used by archangels.
 
 ---
 
-### 4. Timeout debugging is opaque (P2)
+### 3. Timeout debugging is opaque (P2)
 
 **Problem:** When timeout occurs, no information about what was happening:
 - Was the agent stuck thinking?
@@ -102,7 +77,7 @@ Hint: Try ax debug --session=xxx to see current screen
 
 ---
 
-### 5. Help text doesn't indicate message must come first (P2)
+### 4. Help text doesn't indicate message must come first (P2)
 
 **File:** `ax.js` help output
 
@@ -112,7 +87,7 @@ Hint: Try ax debug --session=xxx to see current screen
 
 ---
 
-### 6. Help text should show actual default values (P1)
+### 5. Help text should show actual default values (P1)
 
 **File:** `ax.js` help output / `printHelp()`
 
@@ -132,7 +107,7 @@ This keeps help text in sync with code and makes defaults discoverable.
 
 ---
 
-### 7. No streaming output during long-running commands (P1)
+### 6. No streaming output during long-running commands (P1)
 
 **Files:** `ax.js:2016-2052` (waitForResponse), `ax.js:2062-2085` (autoApproveLoop)
 
@@ -211,7 +186,7 @@ The plan has several strong points...
 
 ---
 
-### 8. Clarify `--no-wait` vs backgrounding in help text (P2)
+### 7. Clarify `--no-wait` vs backgrounding in help text (P2)
 
 **Problem:** LLMs might see `--no-wait` and think it's for backgrounding tasks. It's not - it's fire-and-forget. This causes confusion.
 
@@ -227,7 +202,7 @@ The plan has several strong points...
 
 2. **Backgrounding (Ctrl+B in Claude Code)**: Command keeps running, output streams to task file, notification on completion
    - This already works - `ax` is just a CLI
-   - But requires #7 (streaming) so output appears incrementally, not buffered until end
+   - But requires #6 (streaming) so output appears incrementally, not buffered until end
 
 **Fixes:**
 
@@ -247,10 +222,10 @@ The plan has several strong points...
    ax review pr --wait            # May take 5-15 minutes; consider backgrounding
    ```
 
-**Why this matters:** With #7 (streaming) fixed, backgrounded commands will incrementally write output to the task file, giving visibility into progress. The default for LLMs should be to background long tasks, not block.
+**Why this matters:** With #6 (streaming) fixed, backgrounded commands will incrementally write output to the task file, giving visibility into progress. The default for LLMs should be to background long tasks, not block.
 
 **Dependencies:**
-- #7 should be fixed (so backgrounded commands stream output properly)
+- #6 should be fixed (so backgrounded commands stream output properly)
 
 ---
 
@@ -259,7 +234,4 @@ The plan has several strong points...
 ```bash
 # Race condition
 # (harder to test - need to simulate state change during command)
-
-# Empty output
-ax status --session=xxx                   # Should print "READY" not nothing
 ```

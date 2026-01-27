@@ -3536,6 +3536,8 @@ async function cmdOutput(agent, session, index = 0, { wait = false, timeoutMs } 
   const output = agent.getResponse(session, screen, index);
   if (output) {
     console.log(output);
+  } else {
+    console.log("READY_NO_CONTENT");
   }
 }
 
@@ -3566,6 +3568,10 @@ function cmdStatus(agent, session) {
     console.log("THINKING");
     process.exit(4);
   }
+
+  // READY (or STARTING/UPDATE_PROMPT which are transient)
+  console.log("READY");
+  process.exit(0);
 }
 
 /**
