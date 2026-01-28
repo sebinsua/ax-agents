@@ -485,6 +485,7 @@ async function readStdinIfNeeded(value) {
  * @property {boolean} all
  * @property {boolean} orphans
  * @property {boolean} force
+ * @property {boolean} stale
  * @property {boolean} version
  * @property {boolean} help
  * @property {string} [tool]
@@ -509,6 +510,7 @@ function parseCliArgs(args) {
       all: { type: "boolean", default: false },
       orphans: { type: "boolean", default: false },
       force: { type: "boolean", default: false },
+      stale: { type: "boolean", default: false },
       version: { type: "boolean", short: "V", default: false },
       help: { type: "boolean", short: "h", default: false },
       // Value flags
@@ -535,6 +537,7 @@ function parseCliArgs(args) {
       all: Boolean(values.all),
       orphans: Boolean(values.orphans),
       force: Boolean(values.force),
+      stale: Boolean(values.stale),
       version: Boolean(values.version),
       help: Boolean(values.help),
       tool: /** @type {string | undefined} */ (values.tool),
@@ -4325,9 +4328,14 @@ async function cmdReview(
  * @param {Agent} agent
  * @param {string | null | undefined} session
  * @param {number} [index]
- * @param {{wait?: boolean, timeoutMs?: number}} [options]
+ * @param {{wait?: boolean, stale?: boolean, timeoutMs?: number}} [options]
  */
-async function cmdOutput(agent, session, index = 0, { wait = false, timeoutMs } = {}) {
+async function cmdOutput(
+  agent,
+  session,
+  index = 0,
+  { wait = false, stale = false, timeoutMs } = {},
+) {
   if (!session || !tmuxHasSession(session)) {
     console.log("ERROR: no session");
     process.exit(1);
@@ -4354,8 +4362,11 @@ async function cmdOutput(agent, session, index = 0, { wait = false, timeoutMs } 
   }
 
   if (state === State.THINKING) {
-    console.log("THINKING");
-    process.exit(4);
+    if (!stale) {
+      console.log("THINKING: Use --wait to block, or --stale for old response.");
+      process.exit(1);
+    }
+    // --stale: fall through to show previous response
   }
 
   const output = agent.getResponse(session, screen, index);
@@ -4656,7 +4667,7 @@ async function main() {
   }
 
   // Extract flags into local variables for convenience
-  const { wait, noWait, yolo, fresh, reasoning, follow, all, orphans, force } = flags;
+  const { wait, noWait, yolo, fresh, reasoning, follow, all, orphans, force, stale } = flags;
 
   // Session resolution (must happen before agent resolution so we can infer tool from session name)
   let session = null;
@@ -4762,7 +4773,7 @@ async function main() {
   if (cmd === "output") {
     const indexArg = positionals[1];
     const index = indexArg?.startsWith("-") ? parseInt(indexArg, 10) : 0;
-    return cmdOutput(agent, session, index, { wait, timeoutMs });
+    return cmdOutput(agent, session, index, { wait, stale, timeoutMs });
   }
   if (cmd === "send" && positionals.length > 1)
     return cmdSend(session, positionals.slice(1).join(" "));
