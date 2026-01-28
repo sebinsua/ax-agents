@@ -2668,6 +2668,12 @@ async function cmdStart(agent, session, { yolo = false } = {}) {
       continue;
     }
 
+    if (state === State.CONFIRMING) {
+      tmuxSend(session, agent.approveKey);
+      await sleep(APPROVE_DELAY_MS);
+      continue;
+    }
+
     if (state === State.READY) return session;
 
     await sleep(POLL_MS);
