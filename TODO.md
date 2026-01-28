@@ -95,18 +95,6 @@ ax output
 
 Option A is cleaner - don't give data that will mislead. Stale data presented as current is worse than no data.
 
-## Nudge Toward run_in_background on Blocking Commands
-
-**Context:** When `ax` (or any blocking command) streams output for a long time, the LLM is stuck waiting. It has `run_in_background` capability but forgets to use it.
-
-**Solution:** On blocking commands that take a while, suggest backgrounding:
-
-```
-Still working... (45s elapsed)
-Tip: For long tasks, use run_in_background to continue working.
-```
-
-The nudge comes WHILE blocking (when it's relevant), not on --no-wait (when they're already async).
 ## Handle Claude CLI Feedback Modal
 
 **Bug:** When Claude CLI shows its feedback modal, `ax send` reports success but keys are swallowed.

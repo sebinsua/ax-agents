@@ -1908,6 +1908,7 @@ const State = {
   THINKING: "thinking",
   CONFIRMING: "confirming",
   RATE_LIMITED: "rate_limited",
+  FEEDBACK_MODAL: "feedback_modal",
 };
 
 /**
@@ -1933,6 +1934,17 @@ function detectState(screen, config) {
   // Rate limited - check recent lines (not full screen to avoid matching historical output)
   if (config.rateLimitPattern && config.rateLimitPattern.test(recentLines)) {
     return State.RATE_LIMITED;
+  }
+
+  // Feedback modal - Claude CLI's "How is Claude doing this session?" prompt
+  // Match the numbered options pattern (flexible on whitespace)
+  if (
+    /1:\s*Bad/i.test(recentLines) &&
+    /2:\s*Fine/i.test(recentLines) &&
+    /3:\s*Good/i.test(recentLines) &&
+    /0:\s*Dismiss/i.test(recentLines)
+  ) {
+    return State.FEEDBACK_MODAL;
   }
 
   // Confirming - check before THINKING because "Running…" in tool output matches thinking patterns
@@ -2488,8 +2500,12 @@ async function waitUntilReady(agent, session, timeoutMs = DEFAULT_TIMEOUT_MS) {
   const initialScreen = tmuxCapture(session);
   const initialState = agent.getState(initialScreen);
 
-  // Already in terminal state
-  if (
+  // Dismiss feedback modal if present
+  if (initialState === State.FEEDBACK_MODAL) {
+    tmuxSend(session, "0");
+    await sleep(200);
+  } else if (
+    // Already in terminal state
     initialState === State.RATE_LIMITED ||
     initialState === State.CONFIRMING ||
     initialState === State.READY
@@ -2501,6 +2517,13 @@ async function waitUntilReady(agent, session, timeoutMs = DEFAULT_TIMEOUT_MS) {
     await sleep(POLL_MS);
     const screen = tmuxCapture(session);
     const state = agent.getState(screen);
+
+    // Dismiss feedback modal if it appears
+    if (state === State.FEEDBACK_MODAL) {
+      tmuxSend(session, "0");
+      await sleep(200);
+      continue;
+    }
 
     if (state === State.RATE_LIMITED || state === State.CONFIRMING || state === State.READY) {
       return { state, screen };
@@ -2540,6 +2563,13 @@ async function pollForResponse(agent, session, timeoutMs, hooks = {}) {
 
     if (state === State.RATE_LIMITED || state === State.CONFIRMING) {
       return { state, screen };
+    }
+
+    // Dismiss feedback modal if it appears
+    if (state === State.FEEDBACK_MODAL) {
+      tmuxSend(session, "0");
+      await sleep(200);
+      continue;
     }
 
     if (screen !== lastScreen) {
@@ -2651,6 +2681,7 @@ async function autoApproveLoop(agent, session, timeoutMs, waitFn) {
       continue;
     }
 
+    // FEEDBACK_MODAL is handled by the underlying waitFn (pollForResponse)
     debugError("autoApproveLoop", new Error(`unexpected state: ${state}`));
   }
 
@@ -2689,6 +2720,12 @@ async function cmdStart(agent, session, { yolo = false } = {}) {
 
     if (state === State.UPDATE_PROMPT) {
       await agent.handleUpdatePrompt(session);
+      continue;
+    }
+
+    if (state === State.FEEDBACK_MODAL) {
+      tmuxSend(session, "0");
+      await sleep(200);
       continue;
     }
 

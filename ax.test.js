@@ -665,12 +665,48 @@ Some other content
     });
   });
 
+  describe("FEEDBACK_MODAL state", () => {
+    it("detects Claude feedback modal", () => {
+      const screen = `Done processing your request.
+
+● How is Claude doing this session? (optional)
+  1: Bad    2: Fine   3: Good   0: Dismiss`;
+      assert.strictEqual(detectState(screen, claudeConfig), State.FEEDBACK_MODAL);
+    });
+
+    it("detects feedback modal with varying whitespace", () => {
+      const screen = `● How is Claude doing this session? (optional)
+  1:Bad 2:Fine 3:Good 0:Dismiss`;
+      assert.strictEqual(detectState(screen, claudeConfig), State.FEEDBACK_MODAL);
+    });
+
+    it("does not match partial options", () => {
+      // Missing some options should NOT trigger
+      const screen = `1: Bad  2: Fine
+❯ `;
+      assert.strictEqual(detectState(screen, claudeConfig), State.READY);
+    });
+
+    it("feedback modal beats confirming", () => {
+      const screen = `Do you want to proceed?
+1: Bad  2: Fine  3: Good  0: Dismiss`;
+      assert.strictEqual(detectState(screen, claudeConfig), State.FEEDBACK_MODAL);
+    });
+  });
+
   describe("priority order", () => {
     it("rate limit beats everything", () => {
       const screen = `Rate limit hit
 ⠋ Still spinning
 Do you want to proceed?
 ❯ `;
+      assert.strictEqual(detectState(screen, claudeConfig), State.RATE_LIMITED);
+    });
+
+    it("rate limit beats feedback modal", () => {
+      const screen = `Rate limit exceeded
+How is Claude doing this session?
+1: Bad  2: Fine  3: Good  0: Dismiss`;
       assert.strictEqual(detectState(screen, claudeConfig), State.RATE_LIMITED);
     });
 
