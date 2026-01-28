@@ -3984,12 +3984,29 @@ async function cmdRfp(prompt, { archangels, fresh = false, noWait = false } = {}
 
   writeRfpRecord(rfpId, prompt);
   const archangelList = requested.join(",");
+  const base = rfpId.split("-")[1];
+  const shortId = `rfp-${base}`;
   console.log(`rfp: ${rfpId} (${archangelList})`);
   if (noWait) {
-    const cli = path.basename(process.argv[1], ".js");
-    const base = rfpId.split("-")[1];
-    const shortId = `rfp-${base}`;
-    console.log(`e.g.\n  ${cli} rfp wait ${shortId} --archangels=${archangelList}`);
+    // Truncate prompt for display (first line, max 60 chars)
+    const firstLine = prompt.split("\n")[0];
+    const taskPreview = firstLine.length > 60 ? firstLine.slice(0, 57) + "..." : firstLine;
+
+    let output = `Task: ${taskPreview}
+
+Add this to your task list, then continue with your work.`;
+
+    // Show TaskCreate example if caller is Claude
+    const caller = findCallerAgent();
+    if (caller?.agent === "claude") {
+      output += `
+
+e.g.
+  TaskCreate({ subject: "ax:${shortId} - ${taskPreview}" })
+`;
+    }
+
+    console.log(output);
   }
 }
 
@@ -4131,12 +4148,26 @@ async function cmdAsk(
   if (noWait) {
     const parsed = parseSessionName(activeSession);
     const shortId = parsed?.uuid?.slice(0, 8) || activeSession;
-    const cli = path.basename(process.argv[1], ".js");
-    console.log(`Sent to: ${shortId}
+    // Truncate message for display (first line, max 60 chars)
+    const firstLine = message.split("\n")[0];
+    const taskPreview = firstLine.length > 60 ? firstLine.slice(0, 57) + "..." : firstLine;
+
+    let output = `Sent to: ${shortId}
+Task: ${taskPreview}
+
+Add this to your task list, then continue with your work.`;
+
+    // Show TaskCreate example if caller is Claude
+    const caller = findCallerAgent();
+    if (caller?.agent === "claude") {
+      output += `
 
 e.g.
-  ${cli} status --session=${shortId}
-  ${cli} output --session=${shortId}`);
+  TaskCreate({ subject: "ax:${shortId} - ${taskPreview}" })
+`;
+    }
+
+    console.log(output);
     return;
   }
 
