@@ -2104,29 +2104,50 @@ class Agent {
     const cwd = process.cwd();
     const childPattern = new RegExp(`^${this.name}-(partner-)?[0-9a-f-]{36}$`, "i");
 
-    // If inside tmux, look for existing agent session in same cwd
+    /**
+     * Find a matching session by walking up the directory tree.
+     * Checks exact cwd first, then parent directories up to git root or home.
+     * @param {string[]} sessions
+     * @returns {string | null}
+     */
+    const findSessionInCwdOrParent = (sessions) => {
+      const matchingSessions = sessions.filter((s) => childPattern.test(s));
+      if (matchingSessions.length === 0) return null;
+
+      // Cache session cwds to avoid repeated tmux calls
+      const sessionCwds = new Map(matchingSessions.map((s) => [s, getTmuxSessionCwd(s)]));
+
+      let searchDir = cwd;
+      const homeDir = os.homedir();
+
+      while (searchDir !== homeDir && searchDir !== "/") {
+        const existing = matchingSessions.find((s) => sessionCwds.get(s) === searchDir);
+        if (existing) return existing;
+
+        // Stop at git root (don't leak across projects)
+        if (existsSync(path.join(searchDir, ".git"))) break;
+
+        searchDir = path.dirname(searchDir);
+      }
+
+      return null;
+    };
+
+    // If inside tmux, look for existing agent session in cwd or parent
     const current = tmuxCurrentSession();
     if (current) {
       const sessions = tmuxListSessions();
-      const existing = sessions.find((s) => {
-        if (!childPattern.test(s)) return false;
-        const sessionCwd = getTmuxSessionCwd(s);
-        return sessionCwd === cwd;
-      });
+      const existing = findSessionInCwdOrParent(sessions);
       if (existing) return existing;
-      // No existing session in this cwd - will generate new one in cmdStart
+      // No existing session in this cwd or parent - will generate new one in cmdStart
       return null;
     }
 
-    // Walk up to find claude/codex ancestor and reuse its session (must match cwd)
+    // Walk up to find claude/codex ancestor and reuse its session
     const caller = findCallerAgent();
     if (caller) {
       const sessions = tmuxListSessions();
-      const existing = sessions.find((s) => {
-        if (!childPattern.test(s)) return false;
-        const sessionCwd = getTmuxSessionCwd(s);
-        return sessionCwd === cwd;
-      });
+      const existing = findSessionInCwdOrParent(sessions);
       if (existing) return existing;
     }
 
