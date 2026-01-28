@@ -35,7 +35,9 @@ import { parseArgs } from "node:util";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const packageJson = JSON.parse(readFileSync(path.join(__dirname, "package.json"), "utf-8"));
+const packageJson = JSON.parse(
+  readFileSync(path.join(__dirname, "package.json"), "utf-8"),
+);
 const VERSION = packageJson.version;
 
 /**
@@ -135,7 +137,11 @@ const DEBUG = process.env.AX_DEBUG === "1";
  * @param {unknown} err
  */
 function debugError(context, err) {
-  if (DEBUG) console.error(`[debug:${context}]`, err instanceof Error ? err.message : err);
+  if (DEBUG)
+    console.error(
+      `[debug:${context}]`,
+      err instanceof Error ? err.message : err,
+    );
 }
 
 // =============================================================================
@@ -235,10 +241,15 @@ function tmuxKill(session) {
  */
 function tmuxNewSession(session, command) {
   // Use spawnSync to avoid command injection via session/command
-  const result = spawnSync("tmux", ["new-session", "-d", "-s", session, command], {
-    encoding: "utf-8",
-  });
-  if (result.status !== 0) throw new Error(result.stderr || "tmux new-session failed");
+  const result = spawnSync(
+    "tmux",
+    ["new-session", "-d", "-s", session, command],
+    {
+      encoding: "utf-8",
+    },
+  );
+  if (result.status !== 0)
+    throw new Error(result.stderr || "tmux new-session failed");
 }
 
 /**
@@ -284,8 +295,14 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 const POLL_MS = parseInt(process.env.AX_POLL_MS || "200", 10);
 const DEFAULT_TIMEOUT_MS = parseInt(process.env.AX_TIMEOUT_MS || "120000", 10);
-const REVIEW_TIMEOUT_MS = parseInt(process.env.AX_REVIEW_TIMEOUT_MS || "900000", 10); // 15 minutes
-const STARTUP_TIMEOUT_MS = parseInt(process.env.AX_STARTUP_TIMEOUT_MS || "30000", 10);
+const REVIEW_TIMEOUT_MS = parseInt(
+  process.env.AX_REVIEW_TIMEOUT_MS || "900000",
+  10,
+); // 15 minutes
+const STARTUP_TIMEOUT_MS = parseInt(
+  process.env.AX_STARTUP_TIMEOUT_MS || "30000",
+  10,
+);
 const ARCHANGEL_STARTUP_TIMEOUT_MS = parseInt(
   process.env.AX_ARCHANGEL_STARTUP_TIMEOUT_MS || "60000",
   10,
@@ -294,12 +311,20 @@ const ARCHANGEL_RESPONSE_TIMEOUT_MS = parseInt(
   process.env.AX_ARCHANGEL_RESPONSE_TIMEOUT_MS || "300000",
   10,
 ); // 5 minutes
-const ARCHANGEL_HEALTH_CHECK_MS = parseInt(process.env.AX_ARCHANGEL_HEALTH_CHECK_MS || "30000", 10);
+const ARCHANGEL_HEALTH_CHECK_MS = parseInt(
+  process.env.AX_ARCHANGEL_HEALTH_CHECK_MS || "30000",
+  10,
+);
 const STABLE_MS = parseInt(process.env.AX_STABLE_MS || "1000", 10);
 const APPROVE_DELAY_MS = parseInt(process.env.AX_APPROVE_DELAY_MS || "100", 10);
-const MAILBOX_MAX_AGE_MS = parseInt(process.env.AX_MAILBOX_MAX_AGE_MS || "3600000", 10); // 1 hour
-const CLAUDE_CONFIG_DIR = process.env.AX_CLAUDE_CONFIG_DIR || path.join(os.homedir(), ".claude");
-const CODEX_CONFIG_DIR = process.env.AX_CODEX_CONFIG_DIR || path.join(os.homedir(), ".codex");
+const MAILBOX_MAX_AGE_MS = parseInt(
+  process.env.AX_MAILBOX_MAX_AGE_MS || "3600000",
+  10,
+); // 1 hour
+const CLAUDE_CONFIG_DIR =
+  process.env.AX_CLAUDE_CONFIG_DIR || path.join(os.homedir(), ".claude");
+const CODEX_CONFIG_DIR =
+  process.env.AX_CODEX_CONFIG_DIR || path.join(os.homedir(), ".codex");
 const TRUNCATE_USER_LEN = 500;
 const TRUNCATE_THINKING_LEN = 300;
 const ARCHANGEL_GIT_CONTEXT_HOURS = 4;
@@ -358,9 +383,13 @@ async function waitFor(session, predicate, timeoutMs = STARTUP_TIMEOUT_MS) {
 function findCallerAgent() {
   let pid = process.ppid;
   while (pid > 1) {
-    const result = spawnSync("ps", ["-p", pid.toString(), "-o", "ppid=,comm="], {
-      encoding: "utf-8",
-    });
+    const result = spawnSync(
+      "ps",
+      ["-p", pid.toString(), "-o", "ppid=,comm="],
+      {
+        encoding: "utf-8",
+      },
+    );
     if (result.status !== 0) break;
     const parts = result.stdout.trim().split(/\s+/);
     const ppid = parseInt(parts[0], 10);
@@ -377,7 +406,9 @@ function findCallerAgent() {
  * @returns {{pid: string, command: string}[]}
  */
 function findOrphanedProcesses() {
-  const result = spawnSync("ps", ["-eo", "pid=,ppid=,args="], { encoding: "utf-8" });
+  const result = spawnSync("ps", ["-eo", "pid=,ppid=,args="], {
+    encoding: "utf-8",
+  });
 
   if (result.status !== 0 || !result.stdout.trim()) {
     return [];
@@ -503,7 +534,8 @@ function parseCliArgs(args) {
       help: Boolean(values.help),
       tool: /** @type {string | undefined} */ (values.tool),
       session: /** @type {string | undefined} */ (values.session),
-      timeout: values.timeout !== undefined ? Number(values.timeout) : undefined,
+      timeout:
+        values.timeout !== undefined ? Number(values.timeout) : undefined,
       tail: values.tail !== undefined ? Number(values.tail) : undefined,
       limit: values.limit !== undefined ? Number(values.limit) : undefined,
       branch: /** @type {string | undefined} */ (values.branch),
@@ -603,7 +635,11 @@ function findClaudeLogPath(sessionId, sessionName) {
   // Get cwd from tmux session, fall back to process.cwd()
   const cwd = (sessionName && getTmuxSessionCwd(sessionName)) || process.cwd();
   const projectPath = getClaudeProjectPath(cwd);
-  const claudeProjectDir = path.join(CLAUDE_CONFIG_DIR, "projects", projectPath);
+  const claudeProjectDir = path.join(
+    CLAUDE_CONFIG_DIR,
+    "projects",
+    projectPath,
+  );
 
   // Check sessions-index.json first
   const indexPath = path.join(claudeProjectDir, "sessions-index.json");
@@ -611,7 +647,8 @@ function findClaudeLogPath(sessionId, sessionName) {
     try {
       const index = JSON.parse(readFileSync(indexPath, "utf-8"));
       const entry = index.entries?.find(
-        /** @param {{sessionId: string, fullPath?: string}} e */ (e) => e.sessionId === sessionId,
+        /** @param {{sessionId: string, fullPath?: string}} e */ (e) =>
+          e.sessionId === sessionId,
       );
       if (entry?.fullPath) return entry.fullPath;
     } catch (err) {
@@ -664,7 +701,9 @@ function findCodexLogPath(sessionName) {
 
     for (const file of files) {
       // Parse timestamp from filename: rollout-2026-01-22T13-05-15-UUID.jsonl
-      const match = file.match(/^rollout-(\d{4})-(\d{2})-(\d{2})T(\d{2})-(\d{2})-(\d{2})-/);
+      const match = file.match(
+        /^rollout-(\d{4})-(\d{2})-(\d{2})T(\d{2})-(\d{2})-(\d{2})-/,
+      );
       if (!match) continue;
 
       const [, y, mo, d, h, mi, s] = match;
@@ -772,7 +811,12 @@ function formatTodos(todos) {
   if (!todos || todos.length === 0) return "";
   return todos
     .map((t) => {
-      const status = t.status === "completed" ? "[x]" : t.status === "in_progress" ? "[>]" : "[ ]";
+      const status =
+        t.status === "completed"
+          ? "[x]"
+          : t.status === "in_progress"
+            ? "[>]"
+            : "[ ]";
       return `${status} ${t.content || "(no content)"}`;
     })
     .join("\n");
@@ -796,7 +840,11 @@ function getAssistantText(logPath, index = 0) {
     const assistantTexts = [];
     const needed = Math.abs(index) + 1;
 
-    for (let i = lines.length - 1; i >= 0 && assistantTexts.length < needed; i--) {
+    for (
+      let i = lines.length - 1;
+      i >= 0 && assistantTexts.length < needed;
+      i--
+    ) {
       try {
         const entry = JSON.parse(lines[i]);
         if (entry.type === "assistant") {
@@ -1033,7 +1081,9 @@ function loadAgentConfigs() {
       }
       if (config) configs.push(config);
     } catch (err) {
-      console.error(`ERROR: Failed to read ${file}: ${err instanceof Error ? err.message : err}`);
+      console.error(
+        `ERROR: Failed to read ${file}: ${err instanceof Error ? err.message : err}`,
+      );
     }
   }
 
@@ -1052,7 +1102,9 @@ function parseAgentConfig(filename, content) {
   const normalized = content.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
 
   // Parse frontmatter
-  const frontmatterMatch = normalized.match(/^---\n([\s\S]*?)\n---\n([\s\S]*)$/);
+  const frontmatterMatch = normalized.match(
+    /^---\n([\s\S]*?)\n---\n([\s\S]*)$/,
+  );
   if (!frontmatterMatch) {
     if (!normalized.startsWith("---")) {
       return { error: `Missing frontmatter. File must start with '---'` };
@@ -1076,7 +1128,9 @@ function parseAgentConfig(filename, content) {
   const knownFields = ["tool", "interval", "watch"];
 
   // Check for unknown fields (likely typos)
-  const fieldLines = frontmatter.split("\n").filter((line) => /^\w+:/.test(line.trim()));
+  const fieldLines = frontmatter
+    .split("\n")
+    .filter((line) => /^\w+:/.test(line.trim()));
   for (const line of fieldLines) {
     const fieldName = line.trim().match(/^(\w+):/)?.[1];
     if (fieldName && !knownFields.includes(fieldName)) {
@@ -1084,7 +1138,8 @@ function parseAgentConfig(filename, content) {
       const suggestions = knownFields.filter(
         (f) => f[0] === fieldName[0] || fieldName.includes(f.slice(0, 3)),
       );
-      const hint = suggestions.length > 0 ? ` Did you mean '${suggestions[0]}'?` : "";
+      const hint =
+        suggestions.length > 0 ? ` Did you mean '${suggestions[0]}'?` : "";
       return {
         error: `Unknown field '${fieldName}'.${hint} Valid fields: ${knownFields.join(", ")}`,
       };
@@ -1129,7 +1184,9 @@ function parseAgentConfig(filename, content) {
         error: `Empty watch array. Add at least one pattern: watch: ["**/*"]`,
       };
     }
-    watchPatterns = inner.split(",").map((p) => p.trim().replace(/^["']|["']$/g, ""));
+    watchPatterns = inner
+      .split(",")
+      .map((p) => p.trim().replace(/^["']|["']$/g, ""));
     // Validate patterns aren't empty
     if (watchPatterns.some((p) => !p)) {
       return {
@@ -1186,11 +1243,18 @@ function writeToMailbox(payload) {
  * @param {number} [options.limit]
  * @returns {MailboxEntry[]}
  */
-function readMailbox({ maxAge = MAILBOX_MAX_AGE_MS, branch = null, limit = 10 } = {}) {
+function readMailbox({
+  maxAge = MAILBOX_MAX_AGE_MS,
+  branch = null,
+  limit = 10,
+} = {}) {
   if (!existsSync(MAILBOX_PATH)) return [];
 
   const now = Date.now();
-  const lines = readFileSync(MAILBOX_PATH, "utf-8").trim().split("\n").filter(Boolean);
+  const lines = readFileSync(MAILBOX_PATH, "utf-8")
+    .trim()
+    .split("\n")
+    .filter(Boolean);
   /** @type {MailboxEntry[]} */
   const entries = [];
 
@@ -1224,7 +1288,10 @@ function gcMailbox(maxAgeHours = 24) {
 
   const now = Date.now();
   const maxAgeMs = maxAgeHours * 60 * 60 * 1000;
-  const lines = readFileSync(MAILBOX_PATH, "utf-8").trim().split("\n").filter(Boolean);
+  const lines = readFileSync(MAILBOX_PATH, "utf-8")
+    .trim()
+    .split("\n")
+    .filter(Boolean);
   const kept = [];
 
   for (const line of lines) {
@@ -1314,14 +1381,21 @@ function getRecentCommitsDiff(hoursAgo = 4) {
     const since = `--since="${hoursAgo} hours ago"`;
 
     // Get list of commits in range
-    const commits = execSync(`git log ${mainBranch}..HEAD ${since} --oneline 2>/dev/null`, {
-      encoding: "utf-8",
-    }).trim();
+    const commits = execSync(
+      `git log ${mainBranch}..HEAD ${since} --oneline 2>/dev/null`,
+      {
+        encoding: "utf-8",
+      },
+    ).trim();
 
     if (!commits) return "";
 
     // Get diff for those commits
-    const firstCommit = commits.split("\n").filter(Boolean).pop()?.split(" ")[0];
+    const firstCommit = commits
+      .split("\n")
+      .filter(Boolean)
+      .pop()
+      ?.split(" ")[0];
     if (!firstCommit) return "";
     return execSync(`git diff ${firstCommit}^..HEAD 2>/dev/null`, {
       encoding: "utf-8",
@@ -1356,17 +1430,30 @@ function buildGitContext(hoursAgo = 4, maxLinesPerSection = 200) {
 
   const staged = truncateDiff(getStagedDiff(), maxLinesPerSection);
   if (staged) {
-    sections.push("## Staged Changes (about to be committed)\n```diff\n" + staged + "\n```");
+    sections.push(
+      "## Staged Changes (about to be committed)\n```diff\n" + staged + "\n```",
+    );
   }
 
   const uncommitted = truncateDiff(getUncommittedDiff(), maxLinesPerSection);
   if (uncommitted) {
-    sections.push("## Uncommitted Changes (work in progress)\n```diff\n" + uncommitted + "\n```");
+    sections.push(
+      "## Uncommitted Changes (work in progress)\n```diff\n" +
+        uncommitted +
+        "\n```",
+    );
   }
 
-  const recent = truncateDiff(getRecentCommitsDiff(hoursAgo), maxLinesPerSection);
+  const recent = truncateDiff(
+    getRecentCommitsDiff(hoursAgo),
+    maxLinesPerSection,
+  );
   if (recent) {
-    sections.push(`## Recent Commits (last ${hoursAgo} hours)\n\`\`\`diff\n` + recent + "\n```");
+    sections.push(
+      `## Recent Commits (last ${hoursAgo} hours)\n\`\`\`diff\n` +
+        recent +
+        "\n```",
+    );
   }
 
   return sections.join("\n\n");
@@ -1425,10 +1512,16 @@ function findCurrentClaudeSession() {
 
   // Also check non-tmux Claude sessions by scanning the project's log directory
   const projectPath = getClaudeProjectPath(cwd);
-  const claudeProjectDir = path.join(CLAUDE_CONFIG_DIR, "projects", projectPath);
+  const claudeProjectDir = path.join(
+    CLAUDE_CONFIG_DIR,
+    "projects",
+    projectPath,
+  );
   if (existsSync(claudeProjectDir)) {
     try {
-      const files = readdirSync(claudeProjectDir).filter((f) => f.endsWith(".jsonl"));
+      const files = readdirSync(claudeProjectDir).filter((f) =>
+        f.endsWith(".jsonl"),
+      );
       for (const file of files) {
         const uuid = file.replace(".jsonl", "");
         // Skip if we already have this from tmux sessions
@@ -1506,7 +1599,9 @@ function getParentSessionContext(maxEntries = 20) {
 
         // Look for plan file path in the log content
         if (!planPath) {
-          const planMatch = line.match(/\/Users\/[^"]+\/\.claude\/plans\/[^"]+\.md/);
+          const planMatch = line.match(
+            /\/Users\/[^"]+\/\.claude\/plans\/[^"]+\.md/,
+          );
           if (planMatch) planPath = planMatch[0];
         }
 
@@ -1517,7 +1612,8 @@ function getParentSessionContext(maxEntries = 20) {
             entries.push({ type: "user", text: c });
           } else if (Array.isArray(c)) {
             const text = c.find(
-              /** @param {{type: string, text?: string}} x */ (x) => x.type === "text",
+              /** @param {{type: string, text?: string}} x */ (x) =>
+                x.type === "text",
             )?.text;
             if (text && text.length > 10) {
               entries.push({ type: "user", text });
@@ -1614,7 +1710,10 @@ function extractFileEditContext(logPath, filePath) {
 
     for (const tc of toolCalls) {
       const input = tc.input || tc.arguments || {};
-      if (input.file_path === filePath || input.file_path?.endsWith("/" + filePath)) {
+      if (
+        input.file_path === filePath ||
+        input.file_path?.endsWith("/" + filePath)
+      ) {
         editEntry = { entry, toolCall: tc, content: msgContent };
         editIdx = i;
         break;
@@ -1684,7 +1783,10 @@ function extractFileEditContext(logPath, filePath) {
     );
     for (const e of edits) {
       const input = e.input || e.arguments || {};
-      if (input.file_path === filePath || input.file_path?.endsWith("/" + filePath)) {
+      if (
+        input.file_path === filePath ||
+        input.file_path?.endsWith("/" + filePath)
+      ) {
         editSequence++;
       }
     }
@@ -1752,7 +1854,9 @@ const DEFAULT_EXCLUDE_PATTERNS = [
 function watchForChanges(patterns, callback) {
   // Separate include and exclude patterns
   const includePatterns = patterns.filter((p) => !p.startsWith("!"));
-  const userExcludePatterns = patterns.filter((p) => p.startsWith("!")).map((p) => p.slice(1));
+  const userExcludePatterns = patterns
+    .filter((p) => p.startsWith("!"))
+    .map((p) => p.slice(1));
   const excludePatterns = [...DEFAULT_EXCLUDE_PATTERNS, ...userExcludePatterns];
 
   /** @type {import('node:fs').FSWatcher[]} */
@@ -1768,28 +1872,34 @@ function watchForChanges(patterns, callback) {
     watchedDirs.add(dir);
 
     try {
-      const watcher = watch(dir, { recursive: true }, (_eventType, filename) => {
-        if (!filename) return;
-        const fullPath = path.join(dir, filename);
+      const watcher = watch(
+        dir,
+        { recursive: true },
+        (_eventType, filename) => {
+          if (!filename) return;
+          const fullPath = path.join(dir, filename);
 
-        // Check exclusions first
-        for (const ex of excludePatterns) {
-          if (matchesPattern(fullPath, ex) || matchesPattern(filename, ex)) {
-            return; // Excluded
+          // Check exclusions first
+          for (const ex of excludePatterns) {
+            if (matchesPattern(fullPath, ex) || matchesPattern(filename, ex)) {
+              return; // Excluded
+            }
           }
-        }
 
-        // Check if this file matches any include pattern
-        for (const p of includePatterns) {
-          if (matchesPattern(fullPath, p) || matchesPattern(filename, p)) {
-            callback(fullPath);
-            break;
+          // Check if this file matches any include pattern
+          for (const p of includePatterns) {
+            if (matchesPattern(fullPath, p) || matchesPattern(filename, p)) {
+              callback(fullPath);
+              break;
+            }
           }
-        }
-      });
+        },
+      );
       watchers.push(watcher);
     } catch (err) {
-      console.error(`Warning: Failed to watch ${dir}: ${err instanceof Error ? err.message : err}`);
+      console.error(
+        `Warning: Failed to watch ${dir}: ${err instanceof Error ? err.message : err}`,
+      );
     }
   }
 
@@ -1885,7 +1995,12 @@ function detectState(screen, config) {
   // Update prompt
   if (config.updatePromptPatterns) {
     const { screen: sp, lastLines: lp } = config.updatePromptPatterns;
-    if (sp && sp.some((p) => screen.includes(p)) && lp && lp.some((p) => lastLines.includes(p))) {
+    if (
+      sp &&
+      sp.some((p) => screen.includes(p)) &&
+      lp &&
+      lp.some((p) => lastLines.includes(p))
+    ) {
       return State.UPDATE_PROMPT;
     }
   }
@@ -2007,7 +2122,10 @@ class Agent {
     }
 
     const cwd = process.cwd();
-    const childPattern = new RegExp(`^${this.name}-(partner-)?[0-9a-f-]{36}$`, "i");
+    const childPattern = new RegExp(
+      `^${this.name}-(partner-)?[0-9a-f-]{36}$`,
+      "i",
+    );
 
     // If inside tmux, look for existing agent session in same cwd
     const current = tmuxCurrentSession();
@@ -2121,7 +2239,12 @@ class Agent {
     // Logo/branding characters (block drawing)
     if (/[▐▛▜▌▝▘█▀▄]/.test(trimmed) && trimmed.length < 50) return true;
     // Version strings, model info
-    if (/^(Claude Code|OpenAI Codex|Opus|gpt-|model:|directory:|cwd:)/i.test(trimmed)) return true;
+    if (
+      /^(Claude Code|OpenAI Codex|Opus|gpt-|model:|directory:|cwd:)/i.test(
+        trimmed,
+      )
+    )
+      return true;
     // Path-only lines (working directory display)
     if (/^~\/[^\s]*$/.test(trimmed)) return true;
     // Explicit chrome patterns from agent config
@@ -2195,13 +2318,16 @@ class Agent {
       if (lastPromptIdx >= 0) {
         const lastPromptLine = lines[lastPromptIdx];
         const isEmptyPrompt =
-          lastPromptLine.trim() === this.promptSymbol || lastPromptLine.match(/^❯\s*$/);
+          lastPromptLine.trim() === this.promptSymbol ||
+          lastPromptLine.match(/^❯\s*$/);
         if (isEmptyPrompt) {
           // Find the previous prompt (user's input) and extract content between
           // Note: [Pasted text is Claude's truncated output indicator, NOT a prompt
           const prevPromptIdx = lines
             .slice(0, lastPromptIdx)
-            .findLastIndex((/** @type {string} */ l) => l.startsWith(this.promptSymbol));
+            .findLastIndex((/** @type {string} */ l) =>
+              l.startsWith(this.promptSymbol),
+            );
           if (prevPromptIdx >= 0) {
             const betweenPrompts = lines
               .slice(prevPromptIdx + 1, lastPromptIdx)
@@ -2225,7 +2351,10 @@ class Agent {
     return (
       response
         // Remove tool call lines (Search, Read, Grep, etc.)
-        .replace(/^[⏺•]\s*(Search|Read|Grep|Glob|Write|Edit|Bash)\([^)]*\).*$/gm, "")
+        .replace(
+          /^[⏺•]\s*(Search|Read|Grep|Glob|Write|Edit|Bash)\([^)]*\).*$/gm,
+          "",
+        )
         // Remove tool result lines
         .replace(/^⎿\s+.*$/gm, "")
         // Remove "Sautéed for Xs" timing lines
@@ -2383,7 +2512,11 @@ async function waitUntilReady(agent, session, timeoutMs = DEFAULT_TIMEOUT_MS) {
     const screen = tmuxCapture(session);
     const state = agent.getState(screen);
 
-    if (state === State.RATE_LIMITED || state === State.CONFIRMING || state === State.READY) {
+    if (
+      state === State.RATE_LIMITED ||
+      state === State.CONFIRMING ||
+      state === State.READY
+    ) {
       return { state, screen };
     }
   }
@@ -2495,7 +2628,9 @@ async function streamResponse(agent, session, timeoutMs = DEFAULT_TIMEOUT_MS) {
         printedThinking = true;
       } else if (state === State.CONFIRMING) {
         const pendingTool = extractPendingToolFromScreen(screen);
-        console.log(pendingTool ? `[CONFIRMING] ${pendingTool}` : "[CONFIRMING]");
+        console.log(
+          pendingTool ? `[CONFIRMING] ${pendingTool}` : "[CONFIRMING]",
+        );
       }
       if (lastState === State.THINKING && state !== State.THINKING) {
         printedThinking = false;
@@ -2705,8 +2840,11 @@ function startArchangel(config, parentSession = null) {
     env,
   });
   child.unref();
+  const watchingLabel = parentSession
+    ? parentSession.session || parentSession.uuid?.slice(0, 8)
+    : null;
   console.log(
-    `Summoning: ${config.name} (pid ${child.pid})${parentSession ? ` [parent: ${parentSession.session}]` : ""}`,
+    `Summoning: ${config.name} (pid ${child.pid})${watchingLabel ? ` [watching: ${watchingLabel}]` : ""}`,
   );
 }
 
@@ -2765,8 +2903,13 @@ async function cmdArchangel(agentName) {
     }
 
     // Handle bypass permissions confirmation dialog (Claude Code shows this for --dangerously-skip-permissions)
-    if (screen.includes("Bypass Permissions mode") && screen.includes("Yes, I accept")) {
-      console.log(`[archangel:${agentName}] Accepting bypass permissions dialog`);
+    if (
+      screen.includes("Bypass Permissions mode") &&
+      screen.includes("Yes, I accept")
+    ) {
+      console.log(
+        `[archangel:${agentName}] Accepting bypass permissions dialog`,
+      );
       tmuxSend(sessionName, "2"); // Select "Yes, I accept"
       await sleep(300);
       tmuxSend(sessionName, "Enter");
@@ -2819,7 +2962,9 @@ async function cmdArchangel(agentName) {
     try {
       // Get parent session log path for JSONL extraction
       const parent = findParentSession();
-      const logPath = parent ? findClaudeLogPath(parent.uuid, parent.session) : null;
+      const logPath = parent
+        ? findClaudeLogPath(parent.uuid, parent.session)
+        : null;
 
       // Get orientation context (plan and todos) from parent session
       const meta = parent?.session ? getSessionMeta(parent.session) : null;
@@ -2857,7 +3002,8 @@ async function cmdArchangel(agentName) {
         prompt += (prompt ? "\n\n" : "") + "## Current Plan\n\n" + planContent;
       }
       if (includeTodos && todosContent) {
-        prompt += (prompt ? "\n\n" : "") + "## Current Todos\n\n" + todosContent;
+        prompt +=
+          (prompt ? "\n\n" : "") + "## Current Todos\n\n" + todosContent;
       }
 
       if (fileContexts.length > 0) {
@@ -2877,12 +3023,15 @@ async function cmdArchangel(agentName) {
           }
 
           if (ctx.readsBefore.length > 0) {
-            const reads = ctx.readsBefore.map((f) => f.split("/").pop()).join(", ");
+            const reads = ctx.readsBefore
+              .map((f) => f.split("/").pop())
+              .join(", ");
             prompt += `**Files read before:** ${reads}\n`;
           }
         }
 
-        prompt += "\n\n## Files Changed\n  - " + files.slice(0, 10).join("\n  - ");
+        prompt +=
+          "\n\n## Files Changed\n  - " + files.slice(0, 10).join("\n  - ");
 
         const gitContext = buildGitContext(
           ARCHANGEL_GIT_CONTEXT_HOURS,
@@ -2895,7 +3044,9 @@ async function cmdArchangel(agentName) {
         prompt += "\n\nReview these changes.";
       } else {
         // Fallback: no JSONL context available, use conversation + git context
-        const parentContext = getParentSessionContext(ARCHANGEL_PARENT_CONTEXT_ENTRIES);
+        const parentContext = getParentSessionContext(
+          ARCHANGEL_PARENT_CONTEXT_ENTRIES,
+        );
         const gitContext = buildGitContext(
           ARCHANGEL_GIT_CONTEXT_HOURS,
           ARCHANGEL_GIT_CONTEXT_MAX_LINES,
@@ -2903,10 +3054,12 @@ async function cmdArchangel(agentName) {
 
         if (parentContext) {
           prompt +=
-            "\n\n## Main Session Context\n\nThe user is currently working on:\n\n" + parentContext;
+            "\n\n## Main Session Context\n\nThe user is currently working on:\n\n" +
+            parentContext;
         }
 
-        prompt += "\n\n## Files Changed\n  - " + files.slice(0, 10).join("\n  - ");
+        prompt +=
+          "\n\n## Files Changed\n  - " + files.slice(0, 10).join("\n  - ");
 
         if (gitContext) {
           prompt += "\n\n## Git Context\n\n" + gitContext;
@@ -2931,7 +3084,9 @@ async function cmdArchangel(agentName) {
       }
 
       if (state !== State.READY) {
-        console.log(`[archangel:${agentName}] Agent not ready (${state}), skipping`);
+        console.log(
+          `[archangel:${agentName}] Agent not ready (${state}), skipping`,
+        );
         isProcessing = false;
         return;
       }
@@ -2957,7 +3112,8 @@ async function cmdArchangel(agentName) {
 
       const cleanedResponse = agent.getResponse(sessionName, afterScreen) || "";
 
-      const isSkippable = !cleanedResponse || cleanedResponse.trim() === "EMPTY_RESPONSE";
+      const isSkippable =
+        !cleanedResponse || cleanedResponse.trim() === "EMPTY_RESPONSE";
 
       if (!isSkippable) {
         writeToMailbox({
@@ -2968,10 +3124,15 @@ async function cmdArchangel(agentName) {
           files,
           message: cleanedResponse,
         });
-        console.log(`[archangel:${agentName}] Wrote observation for ${files.length} file(s)`);
+        console.log(
+          `[archangel:${agentName}] Wrote observation for ${files.length} file(s)`,
+        );
       }
     } catch (err) {
-      console.error(`[archangel:${agentName}] Error:`, err instanceof Error ? err.message : err);
+      console.error(
+        `[archangel:${agentName}] Error:`,
+        err instanceof Error ? err.message : err,
+      );
     }
 
     isProcessing = false;
@@ -3050,7 +3211,9 @@ async function cmdSummon(name = null) {
     const exists = configs.some((c) => c.name === name);
     if (!exists) {
       if (!/^[a-zA-Z0-9_-]+$/.test(name)) {
-        console.log("ERROR: Name must contain only letters, numbers, dashes, and underscores");
+        console.log(
+          "ERROR: Name must contain only letters, numbers, dashes, and underscores",
+        );
         process.exit(1);
       }
 
@@ -3085,7 +3248,9 @@ Review changed files for bugs, type errors, and edge cases.
 
   const parentSession = findCurrentClaudeSession();
   if (parentSession) {
-    console.log(`Parent session: ${parentSession.session || "(non-tmux)"} [${parentSession.uuid}]`);
+    console.log(
+      `Parent session: ${parentSession.session || "(non-tmux)"} [${parentSession.uuid}]`,
+    );
   }
 
   for (const config of targetConfigs) {
@@ -3322,7 +3487,10 @@ function ensureClaudeHookConfig() {
       const hookExists = settings.hooks[eventName].some(
         /** @param {{hooks?: Array<{command: string}>}} entry */
         (entry) =>
-          entry.hooks?.some(/** @param {{command: string}} h */ (h) => h.command === hookCommand),
+          entry.hooks?.some(
+            /** @param {{command: string}} h */ (h) =>
+              h.command === hookCommand,
+          ),
       );
 
       if (!hookExists) {
@@ -3358,7 +3526,10 @@ function ensureClaudeHookConfig() {
  * @param {string | null | undefined} session
  * @param {{all?: boolean, orphans?: boolean, force?: boolean}} [options]
  */
-function cmdKill(session, { all = false, orphans = false, force = false } = {}) {
+function cmdKill(
+  session,
+  { all = false, orphans = false, force = false } = {},
+) {
   // Handle orphaned processes
   if (orphans) {
     const orphanedProcesses = findOrphanedProcesses();
@@ -3377,7 +3548,9 @@ function cmdKill(session, { all = false, orphans = false, force = false } = {}) 
         killed++;
       }
     }
-    console.log(`Killed ${killed} orphaned process(es)${force ? " (forced)" : ""}`);
+    console.log(
+      `Killed ${killed} orphaned process(es)${force ? " (forced)" : ""}`,
+    );
     return;
   }
 
@@ -3411,7 +3584,9 @@ function cmdKill(session, { all = false, orphans = false, force = false } = {}) 
 
     if (sessionsToKill.length === 0) {
       console.log(`No agents running in ${currentProject}`);
-      console.log(`(Use --all to kill all ${agentSessions.length} agent(s) across all projects)`);
+      console.log(
+        `(Use --all to kill all ${agentSessions.length} agent(s) across all projects)`,
+      );
       return;
     }
   }
@@ -3450,7 +3625,10 @@ function cmdAttach(session) {
  * @param {string | null | undefined} sessionName
  * @param {{tail?: number, reasoning?: boolean, follow?: boolean}} [options]
  */
-function cmdLog(sessionName, { tail = 50, reasoning = false, follow = false } = {}) {
+function cmdLog(
+  sessionName,
+  { tail = 50, reasoning = false, follow = false } = {},
+) {
   if (!sessionName) {
     console.log("ERROR: no session specified. Run 'agents' to list sessions.");
     process.exit(1);
@@ -3495,7 +3673,9 @@ function cmdLog(sessionName, { tail = 50, reasoning = false, follow = false } = 
     }
 
     // For initial print, take last N. For follow, take only new lines.
-    const startIdx = isInitial ? Math.max(0, lines.length - tail) : lastLineCount;
+    const startIdx = isInitial
+      ? Math.max(0, lines.length - tail)
+      : lastLineCount;
     const newLines = lines.slice(startIdx);
     lastLineCount = lines.length;
 
@@ -3607,7 +3787,9 @@ function formatLogEntry(entry, { reasoning = false } = {}) {
     if (reasoning) {
       const thinking = extractThinking(content);
       if (thinking) {
-        parts.push(`> *Thinking*: ${truncate(thinking, TRUNCATE_THINKING_LEN)}\n`);
+        parts.push(
+          `> *Thinking*: ${truncate(thinking, TRUNCATE_THINKING_LEN)}\n`,
+        );
       }
     }
 
@@ -3662,7 +3844,11 @@ function extractToolCalls(content) {
       const input = c.input || c.arguments || {};
       // Extract a reasonable target from the input
       const target =
-        input.file_path || input.path || input.command?.slice(0, 30) || input.pattern || "";
+        input.file_path ||
+        input.path ||
+        input.command?.slice(0, 30) ||
+        input.pattern ||
+        "";
       const shortTarget = target.split("/").pop() || target.slice(0, 20);
       return { name, target: shortTarget, error: c.error };
     });
@@ -3699,7 +3885,9 @@ function cmdMailbox({ limit = 20, branch = null, all = false } = {}) {
   const entries = readMailbox({ maxAge, branch, limit });
 
   if (entries.length === 0) {
-    console.log("No mailbox entries" + (branch ? ` for branch '${branch}'` : ""));
+    console.log(
+      "No mailbox entries" + (branch ? ` for branch '${branch}'` : ""),
+    );
     return;
   }
 
@@ -3743,14 +3931,24 @@ function cmdMailbox({ limit = 20, branch = null, all = false } = {}) {
  * @param {string} message
  * @param {{noWait?: boolean, yolo?: boolean, timeoutMs?: number}} [options]
  */
-async function cmdAsk(agent, session, message, { noWait = false, yolo = false, timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
+async function cmdAsk(
+  agent,
+  session,
+  message,
+  { noWait = false, yolo = false, timeoutMs = DEFAULT_TIMEOUT_MS } = {},
+) {
   const sessionExists = session != null && tmuxHasSession(session);
-  const nativeYolo = sessionExists && isYoloSession(/** @type {string} */ (session));
+  const nativeYolo =
+    sessionExists && isYoloSession(/** @type {string} */ (session));
 
   // Cannot use --yolo --no-wait on a safe session: we need to stay and auto-approve
   if (yolo && noWait && sessionExists && !nativeYolo) {
-    console.log("ERROR: --yolo requires waiting on a session not started with --yolo");
-    console.log("Restart the session with --yolo, or allow waiting for auto-approval");
+    console.log(
+      "ERROR: --yolo requires waiting on a session not started with --yolo",
+    );
+    console.log(
+      "Restart the session with --yolo, or allow waiting for auto-approval",
+    );
     process.exit(1);
   }
 
@@ -3875,7 +4073,12 @@ async function cmdReview(
   session,
   option,
   customInstructions,
-  { wait = true, yolo = false, fresh = false, timeoutMs = REVIEW_TIMEOUT_MS } = {},
+  {
+    wait = true,
+    yolo = false,
+    fresh = false,
+    timeoutMs = REVIEW_TIMEOUT_MS,
+  } = {},
 ) {
   const sessionExists = session != null && tmuxHasSession(session);
 
@@ -3884,7 +4087,11 @@ async function cmdReview(
     tmuxSendLiteral(/** @type {string} */ (session), "/new");
     await sleep(50);
     tmuxSend(/** @type {string} */ (session), "Enter");
-    await waitUntilReady(agent, /** @type {string} */ (session), STARTUP_TIMEOUT_MS);
+    await waitUntilReady(
+      agent,
+      /** @type {string} */ (session),
+      STARTUP_TIMEOUT_MS,
+    );
   }
 
   // Claude: use prompt-based review (no /review command)
@@ -3901,19 +4108,28 @@ async function cmdReview(
   }
 
   // AX_REVIEW_MODE=exec: bypass /review command, send instructions directly
-  if (process.env.AX_REVIEW_MODE === "exec" && option === "custom" && customInstructions) {
+  if (
+    process.env.AX_REVIEW_MODE === "exec" &&
+    option === "custom" &&
+    customInstructions
+  ) {
     return cmdAsk(agent, session, customInstructions, {
       noWait: !wait,
       yolo,
       timeoutMs,
     });
   }
-  const nativeYolo = sessionExists && isYoloSession(/** @type {string} */ (session));
+  const nativeYolo =
+    sessionExists && isYoloSession(/** @type {string} */ (session));
 
   // Cannot use --yolo without --wait on a safe session: we need to stay and auto-approve
   if (yolo && !wait && sessionExists && !nativeYolo) {
-    console.log("ERROR: --yolo requires waiting on a session not started with --yolo");
-    console.log("Restart the session with --yolo, or allow waiting for auto-approval");
+    console.log(
+      "ERROR: --yolo requires waiting on a session not started with --yolo",
+    );
+    console.log(
+      "Restart the session with --yolo, or allow waiting for auto-approval",
+    );
     process.exit(1);
   }
 
@@ -3926,14 +4142,20 @@ async function cmdReview(
   await sleep(50);
   tmuxSend(activeSession, "Enter");
 
-  await waitFor(activeSession, (s) => s.includes("Select a review preset") || s.includes("review"));
+  await waitFor(
+    activeSession,
+    (s) => s.includes("Select a review preset") || s.includes("review"),
+  );
 
   if (option) {
     const key = agent.reviewOptions[option] || option;
     tmuxSend(activeSession, key);
 
     if (option === "custom" && customInstructions) {
-      await waitFor(activeSession, (s) => s.includes("custom") || s.includes("instructions"));
+      await waitFor(
+        activeSession,
+        (s) => s.includes("custom") || s.includes("instructions"),
+      );
       tmuxSendLiteral(activeSession, customInstructions);
       await sleep(50);
       tmuxSend(activeSession, "Enter");
@@ -3965,7 +4187,12 @@ async function cmdReview(
  * @param {number} [index]
  * @param {{wait?: boolean, timeoutMs?: number}} [options]
  */
-async function cmdOutput(agent, session, index = 0, { wait = false, timeoutMs } = {}) {
+async function cmdOutput(
+  agent,
+  session,
+  index = 0,
+  { wait = false, timeoutMs } = {},
+) {
   if (!session || !tmuxHasSession(session)) {
     console.log("ERROR: no session");
     process.exit(1);
@@ -4188,8 +4415,10 @@ function resolveAgent({ toolFlag, sessionName } = {}) {
 
   // 3. CLI invocation name
   const invoked = path.basename(process.argv[1], ".js");
-  if (invoked === "axclaude" || invoked === "claude") return { agent: ClaudeAgent };
-  if (invoked === "axcodex" || invoked === "codex") return { agent: CodexAgent };
+  if (invoked === "axclaude" || invoked === "claude")
+    return { agent: ClaudeAgent };
+  if (invoked === "axcodex" || invoked === "codex")
+    return { agent: CodexAgent };
 
   // 4. Infer from parent process (running from within claude/codex)
   const caller = findCallerAgent();
@@ -4201,7 +4430,9 @@ function resolveAgent({ toolFlag, sessionName } = {}) {
   if (defaultTool === "claude") return { agent: ClaudeAgent };
   if (defaultTool === "codex" || !defaultTool) return { agent: CodexAgent };
 
-  console.error(`WARNING: invalid AX_DEFAULT_TOOL="${defaultTool}", using codex`);
+  console.error(
+    `WARNING: invalid AX_DEFAULT_TOOL="${defaultTool}", using codex`,
+  );
   return { agent: CodexAgent };
 }
 
@@ -4218,66 +4449,55 @@ function printHelp(agent, cliName) {
 
 Usage: ${name} [OPTIONS] <command|message> [ARGS...]
 
-Commands:
-  agents                    List all running agents with state and log paths
+Messaging/State:
+  <message>                 Send message to ${name}
+  review [TYPE]             Review code: pr, uncommitted, commit, custom
+  status                    Exit code: ready=0 rate_limit=2 confirm=3 thinking=4
+  output [-N]               Show response (0=last, -1=prev, -2=older)
+  compact                   Summarise session to shrink context size
+  reset                     Start fresh conversation
+
+Sessions:
+  agents                    List all running agents
   target                    Show default target session for current tool
   attach [SESSION]          Attach to agent session interactively
-  log SESSION               View conversation log (--tail=N, --follow, --reasoning)
-  mailbox                   View archangel observations (--limit=N, --branch=X, --all)
+  kill                      Kill sessions (--all, --session=NAME, --orphans [--force])
+
+Archangels:
   summon [name]             Summon archangels (all, or by name)
   recall [name]             Recall archangels (all, or by name)
-  kill                      Kill sessions (--all, --session=NAME, --orphans [--force])
-  status                    Check state (exit: 0=ready, 2=rate_limited, 3=confirming, 4=thinking)
-  output [-N]               Show response (0=last, -1=prev, -2=older)
-  debug                     Show raw screen output and detected state${
-    hasReview
-      ? `
-  review [TYPE]             Review code: pr, uncommitted, commit, custom`
-      : ""
-  }
-  select N                  Select menu option N
+  mailbox                   Archangel notes (filters: --branch=git, --all)
+
+Recovery:
+  debug                     Show raw screen output and detected state
   approve                   Approve pending action (send 'y')
   reject                    Reject pending action (send 'n')
+  select N                  Select menu option N
   send KEYS                 Send key sequence (e.g. "1[Enter]", "[Escape]")
-  compact                   Summarize conversation (when context is full)
-  reset                     Start fresh conversation
-  <message>                 Send message to ${name}
+  log SESSION               View conversation log (--tail=N, --follow, --reasoning)
 
 Flags:
   --tool=NAME               Use specific agent (codex, claude)
-  --session=NAME            Target session by name, archangel name, or UUID prefix (self = current)
+  --session=ID              name | archangel | uuid-prefix | self
+  --fresh                   Reset conversation before review
+  --yolo                    Skip all confirmations (dangerous)
   --wait                    Wait for response (default for messages; required for approve/reject)
   --no-wait                 Fire-and-forget: send message, print session ID, exit immediately
   --timeout=N               Set timeout in seconds (default: ${DEFAULT_TIMEOUT_MS / 1000}, reviews: ${REVIEW_TIMEOUT_MS / 1000})
-  --yolo                    Skip all confirmations (dangerous)
-  --fresh                   Reset conversation before review
-  --orphans                 Kill orphaned claude/codex processes (PPID=1)
-  --force                   Use SIGKILL instead of SIGTERM (with --orphans)
-
-Environment:
-  AX_DEFAULT_TOOL           Default agent when using 'ax' (claude or codex, default: codex)
-  ${agent.envVar}           Override default session name
-  AX_CLAUDE_CONFIG_DIR      Override Claude config directory (default: ~/.claude)
-  AX_CODEX_CONFIG_DIR       Override Codex config directory (default: ~/.codex)
-  AX_REVIEW_MODE=exec       Bypass /review, send instructions directly (codex only)
-  AX_DEBUG=1                Enable debug logging
 
 Examples:
   ${name} "explain this codebase"
   ${name} "review the error handling"           # Auto custom review (${REVIEW_TIMEOUT_MS / 60000}min timeout)
   ${name} "FYI: auth was refactored" --no-wait  # Send context to a working session (no response needed)
   ${name} review uncommitted --wait
-  ${name} approve --wait
-  ${name} kill                                 # Kill agents in current project
-  ${name} kill --all                           # Kill all agents across all projects
-  ${name} kill --session=NAME                  # Kill specific session
-  ${name} send "1[Enter]"                      # Recovery: select option 1 and press Enter
-  ${name} send "[Escape][Escape]"              # Recovery: escape out of a dialog
-  ${name} summon                               # Summon all archangels from .ai/agents/*.md
-  ${name} summon reviewer                      # Summon by name (creates config if new)
-  ${name} recall                               # Recall all archangels
-  ${name} recall reviewer                      # Recall one by name
-  ${name} agents                               # List all agents (shows TYPE=archangel)
+  ${name} kill                                  # Kill agents in current project
+  ${name} kill --all                            # Kill all agents across all projects
+  ${name} kill --session=NAME                   # Kill specific session
+  ${name} summon                                # Summon all archangels from .ai/agents/*.md
+  ${name} summon reviewer                       # Summon by name (creates config if new)
+  ${name} recall                                # Recall all archangels
+  ${name} recall reviewer                       # Recall one by name
+  ${name} agents                                # List all agents (shows TYPE=archangel)
 
 Note: Reviews and complex tasks may take several minutes.
       Use Bash run_in_background for long operations (not --no-wait).`);
@@ -4288,7 +4508,9 @@ async function main() {
   const tmuxCheck = spawnSync("tmux", ["-V"], { encoding: "utf-8" });
   if (tmuxCheck.error || tmuxCheck.status !== 0) {
     console.error("ERROR: tmux is not installed or not in PATH");
-    console.error("Install with: brew install tmux (macOS) or apt install tmux (Linux)");
+    console.error(
+      "Install with: brew install tmux (macOS) or apt install tmux (Linux)",
+    );
     process.exit(1);
   }
 
@@ -4304,7 +4526,8 @@ async function main() {
   }
 
   // Extract flags into local variables for convenience
-  const { wait, noWait, yolo, fresh, reasoning, follow, all, orphans, force } = flags;
+  const { wait, noWait, yolo, fresh, reasoning, follow, all, orphans, force } =
+    flags;
 
   // Session resolution (must happen before agent resolution so we can infer tool from session name)
   let session = null;
@@ -4323,7 +4546,10 @@ async function main() {
   }
 
   // Agent resolution (considers --tool flag, session name, invocation, and env vars)
-  const { agent, error: agentError } = resolveAgent({ toolFlag: flags.tool, sessionName: session });
+  const { agent, error: agentError } = resolveAgent({
+    toolFlag: flags.tool,
+    sessionName: session,
+  });
   if (agentError) {
     console.log(`ERROR: ${agentError}`);
     process.exit(1);
@@ -4373,7 +4599,8 @@ async function main() {
   if (cmd === "archangel") return cmdArchangel(positionals[1]);
   if (cmd === "kill") return cmdKill(session, { all, orphans, force });
   if (cmd === "attach") return cmdAttach(positionals[1] || session);
-  if (cmd === "log") return cmdLog(positionals[1] || session, { tail, reasoning, follow });
+  if (cmd === "log")
+    return cmdLog(positionals[1] || session, { tail, reasoning, follow });
   if (cmd === "mailbox") return cmdMailbox({ limit, branch, all });
   if (cmd === "approve") return cmdApprove(agent, session, { wait, timeoutMs });
   if (cmd === "reject") return cmdReject(agent, session, { wait, timeoutMs });
@@ -4392,8 +4619,10 @@ async function main() {
   }
   if (cmd === "send" && positionals.length > 1)
     return cmdSend(session, positionals.slice(1).join(" "));
-  if (cmd === "compact") return cmdAsk(agent, session, "/compact", { noWait: true, timeoutMs });
-  if (cmd === "reset") return cmdAsk(agent, session, "/new", { noWait: true, timeoutMs });
+  if (cmd === "compact")
+    return cmdAsk(agent, session, "/compact", { noWait: true, timeoutMs });
+  if (cmd === "reset")
+    return cmdAsk(agent, session, "/new", { noWait: true, timeoutMs });
   if (cmd === "select" && positionals[1])
     return cmdSelect(agent, session, positionals[1], { wait, timeoutMs });
 
@@ -4437,7 +4666,9 @@ if (isDirectRun) {
   main().catch((err) => {
     console.log(`ERROR: ${err.message}`);
     if (err instanceof TimeoutError && err.session) {
-      console.log(`Hint: Use 'ax debug --session=${err.session}' to see current screen state`);
+      console.log(
+        `Hint: Use 'ax debug --session=${err.session}' to see current screen state`,
+      );
     }
     process.exit(1);
   });
