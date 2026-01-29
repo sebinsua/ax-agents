@@ -4759,15 +4759,13 @@ function printHelp(agent, cliName) {
 
 Usage: ${name} [OPTIONS] <command|message> [ARGS...]
 
-Messaging/State:
+Messaging:
   <message>                 Send message to ${name}
   review [TYPE]             Review code: pr, uncommitted, commit, custom
-  status                    Exit code: ready=0 rate_limit=2 confirm=3 thinking=4
-  output [-N]               Show response (0=last, -1=prev, -2=older)
-  compact                   Summarise session to shrink context size
-  reset                     Start fresh conversation
 
 Sessions:
+  compact                   Summarise session to shrink context size
+  reset                     Start fresh conversation
   agents                    List all running agents
   target                    Show default target session for current tool
   attach [SESSION]          Attach to agent session interactively
@@ -4780,13 +4778,15 @@ Archangels:
   rfp <prompt>              Request proposals (--archangels=a,b)
   rfp wait <id>             Wait for proposals (--archangels=a,b)
 
-Recovery:
+Recovery/State:
+  status                    Exit code: ready=0 rate_limit=2 confirm=3 thinking=4
+  output [-N]               Show response (0=last, -1=prev, -2=older)
   debug                     Show raw screen output and detected state
   approve                   Approve pending action (send 'y')
   reject                    Reject pending action (send 'n')
   select N                  Select menu option N
   send KEYS                 Send key sequence (e.g. "1[Enter]", "[Escape]")
-  log SESSION               View conversation log (--tail=N, --follow, --reasoning)
+  log [SESSION]             View conversation log (--tail=N, --follow, --reasoning)
 
 Flags:
   --tool=NAME               Use specific agent (codex, claude)
