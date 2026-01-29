@@ -15,6 +15,8 @@ import {
   detectState,
   State,
   parseCliArgs,
+  normalizeAllowedTools,
+  computePermissionHash,
 } from "./ax.js";
 
 // =============================================================================
@@ -733,5 +735,112 @@ Do you want to proceed?
 ❯ `;
       assert.strictEqual(detectState(screen, claudeConfig), State.READY);
     });
+  });
+});
+
+// =============================================================================
+// Permission utilities
+// =============================================================================
+
+describe("normalizeAllowedTools", () => {
+  it("normalizes whitespace and sorts tools", () => {
+    assert.strictEqual(normalizeAllowedTools('Bash("npm *")  Bash("cargo *")'), 'Bash("cargo *") Bash("npm *")');
+  });
+
+  it("handles single tool", () => {
+    assert.strictEqual(normalizeAllowedTools('Bash("cargo *")'), 'Bash("cargo *")');
+  });
+
+  it("trims leading/trailing whitespace", () => {
+    assert.strictEqual(normalizeAllowedTools('  Bash("cargo *")  '), 'Bash("cargo *")');
+  });
+
+  it("handles multiple spaces between tools", () => {
+    assert.strictEqual(normalizeAllowedTools('Bash("a")    Bash("b")'), 'Bash("a") Bash("b")');
+  });
+
+  it("handles tools without arguments", () => {
+    assert.strictEqual(normalizeAllowedTools("Write Read Grep"), "Grep Read Write");
+  });
+
+  it("handles mixed tools with and without arguments", () => {
+    assert.strictEqual(normalizeAllowedTools('Read Bash("npm *")'), 'Bash("npm *") Read');
+  });
+});
+
+describe("computePermissionHash", () => {
+  it("returns null for null/undefined input", () => {
+    assert.strictEqual(computePermissionHash(null), null);
+    assert.strictEqual(computePermissionHash(undefined), null);
+  });
+
+  it("returns null for empty string", () => {
+    assert.strictEqual(computePermissionHash(""), null);
+  });
+
+  it("returns 8-char hex hash", () => {
+    const hash = computePermissionHash('Bash("cargo *")');
+    assert.match(hash, /^[0-9a-f]{8}$/);
+  });
+
+  it("same tools in different order produce same hash", () => {
+    const hash1 = computePermissionHash('Bash("npm *") Bash("cargo *")');
+    const hash2 = computePermissionHash('Bash("cargo *") Bash("npm *")');
+    assert.strictEqual(hash1, hash2);
+  });
+
+  it("different tools produce different hashes", () => {
+    const hash1 = computePermissionHash('Bash("cargo *")');
+    const hash2 = computePermissionHash('Bash("npm *")');
+    assert.notStrictEqual(hash1, hash2);
+  });
+});
+
+describe("parseSessionName with permission modes", () => {
+  it("parses partner session with permission hash", () => {
+    const result = parseSessionName("claude-partner-12345678-1234-1234-1234-123456789abc-pabcd1234");
+    assert.deepStrictEqual(result, {
+      tool: "claude",
+      uuid: "12345678-1234-1234-1234-123456789abc",
+      permissionHash: "abcd1234",
+    });
+  });
+
+  it("parses partner session with yolo suffix", () => {
+    const result = parseSessionName("claude-partner-12345678-1234-1234-1234-123456789abc-yolo");
+    assert.deepStrictEqual(result, {
+      tool: "claude",
+      uuid: "12345678-1234-1234-1234-123456789abc",
+      yolo: true,
+    });
+  });
+
+  it("parses partner session without suffix (safe mode)", () => {
+    const result = parseSessionName("claude-partner-12345678-1234-1234-1234-123456789abc");
+    assert.deepStrictEqual(result, {
+      tool: "claude",
+      uuid: "12345678-1234-1234-1234-123456789abc",
+    });
+  });
+
+  it("parses archangel sessions", () => {
+    const result = parseSessionName("claude-archangel-reviewer-12345678-1234-1234-1234-123456789abc");
+    assert.deepStrictEqual(result, {
+      tool: "claude",
+      archangelName: "reviewer",
+      uuid: "12345678-1234-1234-1234-123456789abc",
+    });
+  });
+});
+
+describe("parseCliArgs with --auto-approve", () => {
+  it("parses --auto-approve flag", () => {
+    const result = parseCliArgs(['--auto-approve=Bash("cargo *")', "run tests"]);
+    assert.strictEqual(result.flags.autoApprove, 'Bash("cargo *")');
+  });
+
+  it("auto-approve is undefined when not provided", () => {
+    const result = parseCliArgs(["run tests"]);
+    assert.strictEqual(result.flags.autoApprove, undefined);
   });
 });

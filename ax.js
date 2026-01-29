@@ -47,6 +47,8 @@ const VERSION = packageJson.version;
  * @property {string} tool
  * @property {string} [archangelName]
  * @property {string} [uuid]
+ * @property {string} [permissionHash]
+ * @property {boolean} [yolo]
  */
 
 /**
@@ -259,25 +261,66 @@ function tmuxCurrentSession() {
 }
 
 /**
- * Check if a session was started in yolo mode by inspecting the pane's start command.
+ * @typedef {Object} SessionPermissions
+ * @property {'yolo' | 'custom' | 'safe'} mode
+ * @property {string | null} allowedTools
+ * @property {string | null} hash
+ */
+
+const SAFE_PERMISSIONS = /** @type {SessionPermissions} */ ({
+  mode: "safe",
+  allowedTools: null,
+  hash: null,
+});
+
+/**
+ * Get permission info from a session based on its name.
+ * Session name encodes permission mode: -yolo, -p{hash}, or neither (safe).
+ * @param {string} session
+ * @returns {SessionPermissions}
+ */
+function getSessionPermissions(session) {
+  const parsed = parseSessionName(session);
+  if (parsed?.yolo) {
+    return { mode: "yolo", allowedTools: null, hash: null };
+  }
+  if (parsed?.permissionHash) {
+    return { mode: "custom", allowedTools: null, hash: parsed.permissionHash };
+  }
+  return SAFE_PERMISSIONS;
+}
+
+/**
+ * Check if a session was started in yolo mode.
  * @param {string} session
  * @returns {boolean}
  */
 function isYoloSession(session) {
-  try {
-    const result = spawnSync(
-      "tmux",
-      ["display-message", "-t", session, "-p", "#{pane_start_command}"],
-      {
-        encoding: "utf-8",
-      },
-    );
-    if (result.status !== 0) return false;
-    const cmd = result.stdout.trim();
-    return cmd.includes("--dangerously-");
-  } catch {
-    return false;
-  }
+  return getSessionPermissions(session).mode === "yolo";
+}
+
+/**
+ * Normalize allowed tools string for consistent hashing.
+ * Splits on tool boundaries (e.g., 'Bash("...") Read') while preserving quoted content.
+ * @param {string} tools
+ * @returns {string}
+ */
+function normalizeAllowedTools(tools) {
+  // Match tool patterns: ToolName or ToolName("args") or ToolName("args with spaces")
+  const toolPattern = /\w+(?:\("[^"]*"\))?/g;
+  const matches = tools.match(toolPattern) || [];
+  return matches.sort().join(" ");
+}
+
+/**
+ * Compute a short hash of the allowed tools for session naming.
+ * @param {string | null | undefined} allowedTools
+ * @returns {string | null}
+ */
+function computePermissionHash(allowedTools) {
+  if (!allowedTools) return null;
+  const normalized = normalizeAllowedTools(allowedTools);
+  return createHash("sha256").update(normalized).digest("hex").slice(0, 8);
 }
 
 // =============================================================================
@@ -495,6 +538,7 @@ async function readStdinIfNeeded(value) {
  * @property {number} [limit]
  * @property {string} [branch]
  * @property {string} [archangels]
+ * @property {string} [autoApprove]
  */
 function parseCliArgs(args) {
   const { values, positionals } = parseArgs({
@@ -515,6 +559,7 @@ function parseCliArgs(args) {
       help: { type: "boolean", short: "h", default: false },
       // Value flags
       tool: { type: "string" },
+      "auto-approve": { type: "string" },
       session: { type: "string" },
       timeout: { type: "string" },
       tail: { type: "string" },
@@ -547,6 +592,7 @@ function parseCliArgs(args) {
       limit: values.limit !== undefined ? Number(values.limit) : undefined,
       branch: /** @type {string | undefined} */ (values.branch),
       archangels: /** @type {string | undefined} */ (values.archangels),
+      autoApprove: /** @type {string | undefined} */ (values["auto-approve"]),
     },
     positionals,
   };
@@ -554,6 +600,10 @@ function parseCliArgs(args) {
 
 // Helpers - session tracking
 // =============================================================================
+
+// Regex pattern strings for session name parsing
+const UUID_PATTERN = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
+const PERM_HASH_PATTERN = "[0-9a-f]{8}";
 
 /**
  * @param {string} session
@@ -567,19 +617,27 @@ function parseSessionName(session) {
   const rest = match[2];
 
   // Archangel: {tool}-archangel-{name}-{uuid}
-  const archangelMatch = rest.match(
-    /^archangel-(.+)-([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i,
-  );
+  const archangelPattern = new RegExp(`^archangel-(.+)-(${UUID_PATTERN})$`, "i");
+  const archangelMatch = rest.match(archangelPattern);
   if (archangelMatch) {
     return { tool, archangelName: archangelMatch[1], uuid: archangelMatch[2] };
   }
 
-  // Partner: {tool}-partner-{uuid}
-  const partnerMatch = rest.match(
-    /^partner-([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i,
+  // Partner: {tool}-partner-{uuid}[-p{hash}|-yolo]
+  const partnerPattern = new RegExp(
+    `^partner-(${UUID_PATTERN})(?:-p(${PERM_HASH_PATTERN})|-(yolo))?$`,
+    "i",
   );
+  const partnerMatch = rest.match(partnerPattern);
   if (partnerMatch) {
-    return { tool, uuid: partnerMatch[1] };
+    const result = { tool, uuid: partnerMatch[1] };
+    if (partnerMatch[2]) {
+      return { ...result, permissionHash: partnerMatch[2] };
+    }
+    if (partnerMatch[3]) {
+      return { ...result, yolo: true };
+    }
+    return result;
   }
 
   // Anything else
@@ -588,10 +646,19 @@ function parseSessionName(session) {
 
 /**
  * @param {string} tool
+ * @param {{allowedTools?: string | null, yolo?: boolean}} [options]
  * @returns {string}
  */
-function generateSessionName(tool) {
-  return `${tool}-partner-${randomUUID()}`;
+function generateSessionName(tool, { allowedTools = null, yolo = false } = {}) {
+  const uuid = randomUUID();
+  if (yolo) {
+    return `${tool}-partner-${uuid}-yolo`;
+  }
+  const hash = computePermissionHash(allowedTools);
+  if (hash) {
+    return `${tool}-partner-${uuid}-p${hash}`;
+  }
+  return `${tool}-partner-${uuid}`;
 }
 
 /**
@@ -2088,12 +2155,18 @@ class Agent {
   /**
    * @param {boolean} [yolo]
    * @param {string | null} [sessionName]
+   * @param {string | null} [customAllowedTools]
    * @returns {string}
    */
-  getCommand(yolo, sessionName = null) {
+  getCommand(yolo, sessionName = null, customAllowedTools = null) {
     let base;
     if (yolo) {
       base = this.yoloCommand;
+    } else if (customAllowedTools) {
+      // Custom permissions from --auto-approve flag
+      // Escape quotes for shell since tmux runs the command through a shell
+      const escaped = customAllowedTools.replace(/"/g, '\\"');
+      base = `${this.startCommand} --allowedTools "${escaped}"`;
     } else if (this.safeAllowedTools) {
       // Default: auto-approve safe read-only operations
       base = `${this.startCommand} --allowedTools "${this.safeAllowedTools}"`;
@@ -2110,14 +2183,23 @@ class Agent {
     return base;
   }
 
-  getDefaultSession() {
+  /**
+   * @param {{allowedTools?: string | null, yolo?: boolean}} [options]
+   * @returns {string | null}
+   */
+  getDefaultSession({ allowedTools = null, yolo = false } = {}) {
     // Check env var for explicit session
     if (this.envVar && process.env[this.envVar]) {
-      return process.env[this.envVar];
+      return process.env[this.envVar] ?? null;
     }
 
     const cwd = process.cwd();
-    const childPattern = new RegExp(`^${this.name}-(partner-)?[0-9a-f-]{36}$`, "i");
+    // Match sessions: {tool}-(partner-)?{uuid}[-p{hash}|-yolo]?
+    const childPattern = new RegExp(
+      `^${this.name}-(partner-)?${UUID_PATTERN}(-p${PERM_HASH_PATTERN}|-yolo)?$`,
+      "i",
+    );
+    const requestedHash = computePermissionHash(allowedTools);
 
     /**
      * Find a matching session by walking up the directory tree.
@@ -2126,7 +2208,24 @@ class Agent {
      * @returns {string | null}
      */
     const findSessionInCwdOrParent = (sessions) => {
-      const matchingSessions = sessions.filter((s) => childPattern.test(s));
+      const matchingSessions = sessions.filter((s) => {
+        if (!childPattern.test(s)) return false;
+
+        const perms = getSessionPermissions(s);
+
+        // If yolo requested, only match yolo sessions
+        if (yolo) {
+          return perms.mode === "yolo";
+        }
+
+        // If custom permissions requested, match yolo (superset) or same hash
+        if (requestedHash) {
+          return perms.mode === "yolo" || perms.hash === requestedHash;
+        }
+
+        // If no special permissions, match safe sessions only
+        return perms.mode === "safe";
+      });
       if (matchingSessions.length === 0) return null;
 
       // Cache session cwds to avoid repeated tmux calls
@@ -2171,10 +2270,11 @@ class Agent {
   }
 
   /**
+   * @param {{allowedTools?: string | null, yolo?: boolean}} [options]
    * @returns {string}
    */
-  generateSession() {
-    return generateSessionName(this.name);
+  generateSession(options = {}) {
+    return generateSessionName(this.name, options);
   }
 
   /**
@@ -2693,12 +2793,13 @@ async function autoApproveLoop(agent, session, timeoutMs, waitFn) {
  * @param {string | null | undefined} session
  * @param {Object} [options]
  * @param {boolean} [options.yolo]
+ * @param {string | null} [options.allowedTools]
  * @returns {Promise<string>}
  */
-async function cmdStart(agent, session, { yolo = false } = {}) {
+async function cmdStart(agent, session, { yolo = false, allowedTools = null } = {}) {
   // Generate session name if not provided
   if (!session) {
-    session = agent.generateSession();
+    session = agent.generateSession({ allowedTools, yolo });
   }
 
   if (tmuxHasSession(session)) return session;
@@ -2710,7 +2811,7 @@ async function cmdStart(agent, session, { yolo = false } = {}) {
     process.exit(1);
   }
 
-  const command = agent.getCommand(yolo, session);
+  const command = agent.getCommand(yolo, session, allowedTools);
   tmuxNewSession(session, command);
 
   const start = Date.now();
@@ -4155,13 +4256,13 @@ async function cmdRfpWait(rfpId, { archangels, timeoutMs = ARCHANGEL_RESPONSE_TI
  * @param {Agent} agent
  * @param {string | null | undefined} session
  * @param {string} message
- * @param {{noWait?: boolean, yolo?: boolean, timeoutMs?: number}} [options]
+ * @param {{noWait?: boolean, yolo?: boolean, allowedTools?: string | null, timeoutMs?: number}} [options]
  */
 async function cmdAsk(
   agent,
   session,
   message,
-  { noWait = false, yolo = false, timeoutMs = DEFAULT_TIMEOUT_MS } = {},
+  { noWait = false, yolo = false, allowedTools = null, timeoutMs = DEFAULT_TIMEOUT_MS } = {},
 ) {
   const sessionExists = session != null && tmuxHasSession(session);
   const nativeYolo = sessionExists && isYoloSession(/** @type {string} */ (session));
@@ -4176,7 +4277,7 @@ async function cmdAsk(
   /** @type {string} */
   const activeSession = sessionExists
     ? /** @type {string} */ (session)
-    : await cmdStart(agent, session, { yolo });
+    : await cmdStart(agent, session, { yolo, allowedTools });
 
   tmuxSendLiteral(activeSession, message);
   await sleep(50);
@@ -4692,23 +4793,25 @@ Flags:
   --session=ID              name | archangel | uuid-prefix | self
   --fresh                   Reset conversation before review
   --yolo                    Skip all confirmations (dangerous)
+  --auto-approve=TOOLS      Auto-approve specific tools (e.g. 'Bash("cargo *")')
   --wait                    Wait for response (default for messages; required for approve/reject)
   --no-wait                 Fire-and-forget: send message, print session ID, exit immediately
   --timeout=N               Set timeout in seconds (default: ${DEFAULT_TIMEOUT_MS / 1000}, reviews: ${REVIEW_TIMEOUT_MS / 1000})
 
 Examples:
   ${name} "explain this codebase"
-  ${name} "review the error handling"           # Auto custom review (${REVIEW_TIMEOUT_MS / 60000}min timeout)
-  ${name} "FYI: auth was refactored" --no-wait  # Send context to a working session (no response needed)
+  ${name} "review the error handling"                   # Auto custom review (${REVIEW_TIMEOUT_MS / 60000}min timeout)
+  ${name} "FYI: auth was refactored" --no-wait          # Send context to a working session (no response needed)
+  ${name} --auto-approve='Bash("cargo *")' "run tests"  # Session with specific permissions
   ${name} review uncommitted --wait
-  ${name} kill                                  # Kill agents in current project
-  ${name} kill --all                            # Kill all agents across all projects
-  ${name} kill --session=NAME                   # Kill specific session
-  ${name} summon                                # Summon all archangels from .ai/agents/*.md
-  ${name} summon reviewer                       # Summon by name (creates config if new)
-  ${name} recall                                # Recall all archangels
-  ${name} recall reviewer                       # Recall one by name
-  ${name} agents                                # List all agents (shows TYPE=archangel)
+  ${name} kill                                          # Kill agents in current project
+  ${name} kill --all                                    # Kill all agents across all projects
+  ${name} kill --session=NAME                           # Kill specific session
+  ${name} summon                                        # Summon all archangels from .ai/agents/*.md
+  ${name} summon reviewer                               # Summon by name (creates config if new)
+  ${name} recall                                        # Recall all archangels
+  ${name} recall reviewer                               # Recall one by name
+  ${name} agents                                        # List all agents (shows TYPE=archangel)
 
 Note: Reviews and complex tasks may take several minutes.
       Use Bash run_in_background for long operations (not --no-wait).`);
@@ -4735,7 +4838,8 @@ async function main() {
   }
 
   // Extract flags into local variables for convenience
-  const { wait, noWait, yolo, fresh, reasoning, follow, all, orphans, force, stale } = flags;
+  const { wait, noWait, yolo, fresh, reasoning, follow, all, orphans, force, stale, autoApprove } =
+    flags;
 
   // Session resolution (must happen before agent resolution so we can infer tool from session name)
   let session = null;
@@ -4763,9 +4867,9 @@ async function main() {
     process.exit(1);
   }
 
-  // If no explicit session, use agent's default
+  // If no explicit session, use agent's default (with permission filtering)
   if (!session) {
-    session = agent.getDefaultSession();
+    session = agent.getDefaultSession({ allowedTools: autoApprove, yolo });
   }
 
   // Timeout (convert seconds to milliseconds)
@@ -4793,7 +4897,7 @@ async function main() {
   // Dispatch commands
   if (cmd === "agents") return cmdAgents();
   if (cmd === "target") {
-    const defaultSession = agent.getDefaultSession();
+    const defaultSession = agent.getDefaultSession({ allowedTools: autoApprove, yolo });
     if (defaultSession) {
       console.log(defaultSession);
     } else {
@@ -4871,7 +4975,12 @@ async function main() {
     });
   }
 
-  return cmdAsk(agent, session, messageText, { noWait, yolo, timeoutMs });
+  return cmdAsk(agent, session, messageText, {
+    noWait,
+    yolo,
+    allowedTools: autoApprove,
+    timeoutMs,
+  });
 }
 
 // Run main() only when executed directly (not when imported for testing)
@@ -4911,4 +5020,6 @@ export {
   extractThinking,
   detectState,
   State,
+  normalizeAllowedTools,
+  computePermissionHash,
 };
