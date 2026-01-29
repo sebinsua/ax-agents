@@ -977,11 +977,12 @@ function tailJsonl(logPath, fromOffset) {
  */
 
 /**
- * Format a JSONL entry for streaming display.
+ * Format a Claude Code JSONL log entry for streaming display.
+ * Claude format: {type: "assistant", message: {content: [...]}}
  * @param {{type?: string, message?: {content?: Array<{type?: string, text?: string, name?: string, input?: ToolInput, tool?: string, arguments?: ToolInput}>}}} entry
  * @returns {string | null}
  */
-function formatEntry(entry) {
+function formatClaudeLogEntry(entry) {
   // Skip tool_result entries (they can be very verbose)
   if (entry.type === "tool_result") return null;
 
@@ -1010,6 +1011,59 @@ function formatEntry(entry) {
   }
 
   return output.length > 0 ? output.join("\n") : null;
+}
+
+/**
+ * Format a Codex JSONL log entry for streaming display.
+ * Codex format:
+ * - {type: "response_item", payload: {type: "message", role: "assistant", content: [{type: "output_text", text: "..."}]}}
+ * - {type: "response_item", payload: {type: "function_call", name: "...", arguments: "{...}"}}
+ * - {type: "event_msg", payload: {type: "agent_message", message: "..."}}
+ * @param {{type?: string, payload?: {type?: string, role?: string, name?: string, arguments?: string, message?: string, content?: Array<{type?: string, text?: string}>}}} entry
+ * @returns {string | null}
+ */
+function formatCodexLogEntry(entry) {
+  // Skip function_call_output entries (equivalent to tool_result - can be verbose)
+  if (entry.type === "response_item" && entry.payload?.type === "function_call_output") {
+    return null;
+  }
+
+  // Handle function calls
+  if (entry.type === "response_item" && entry.payload?.type === "function_call") {
+    const name = entry.payload.name || "tool";
+    let summary = "";
+    try {
+      const args = JSON.parse(entry.payload.arguments || "{}");
+      if (name === "shell_command" && args.command) {
+        summary = args.command.slice(0, 50);
+      } else {
+        const target = args.file_path || args.path || args.pattern || "";
+        summary = target.split("/").pop() || target.slice(0, 30);
+      }
+    } catch {
+      summary = "...";
+    }
+    return `> ${name}(${summary})`;
+  }
+
+  // Handle assistant messages (final response)
+  if (entry.type === "response_item" && entry.payload?.role === "assistant") {
+    const parts = entry.payload.content || [];
+    const output = [];
+    for (const part of parts) {
+      if ((part.type === "output_text" || part.type === "text") && part.text) {
+        output.push(part.text);
+      }
+    }
+    return output.length > 0 ? output.join("\n") : null;
+  }
+
+  // Handle streaming agent messages
+  if (entry.type === "event_msg" && entry.payload?.type === "agent_message") {
+    return entry.payload.message || null;
+  }
+
+  return null;
 }
 
 /**
@@ -2027,19 +2081,21 @@ function detectState(screen, config) {
     }
   }
 
+  // Check for active work patterns first (agent shows prompt even while working)
+  const activeWorkPatterns = config.activeWorkPatterns || [];
+  if (
+    activeWorkPatterns.some((p) => {
+      if (p instanceof RegExp) return p.test(lastLines);
+      return lastLines.includes(p);
+    })
+  ) {
+    return State.THINKING;
+  }
+
   // Ready - check BEFORE thinking to avoid false positives from timing messages like "✻ Worked for 45s"
   // If the prompt symbol is visible, the agent is ready regardless of spinner characters in timing messages
   if (lastLines.includes(config.promptSymbol)) {
-    // Check if any line has the prompt followed by pasted content indicator
-    // "[Pasted text" indicates user has pasted content and Claude is still processing
-    const linesArray = lastLines.split("\n");
-    const promptWithPaste = linesArray.some(
-      (l) => l.includes(config.promptSymbol) && l.includes("[Pasted text"),
-    );
-    if (!promptWithPaste) {
-      return State.READY;
-    }
-    // If prompt has pasted content, Claude is still processing - not ready yet
+    return State.READY;
   }
 
   // Thinking - spinners (check last lines only)
@@ -2094,6 +2150,7 @@ function detectState(screen, config) {
  * @property {string[]} [spinners]
  * @property {RegExp} [rateLimitPattern]
  * @property {(string | RegExp | ((lines: string) => boolean))[]} [thinkingPatterns]
+ * @property {(string | RegExp)[]} [activeWorkPatterns]
  * @property {ConfirmPattern[]} [confirmPatterns]
  * @property {UpdatePromptPatterns | null} [updatePromptPatterns]
  * @property {string[]} [responseMarkers]
@@ -2105,6 +2162,7 @@ function detectState(screen, config) {
  * @property {string} [safeAllowedTools]
  * @property {string | null} [sessionIdFlag]
  * @property {((sessionName: string) => string | null) | null} [logPathFinder]
+ * @property {((entry: object) => string | null) | null} [logEntryFormatter]
  */
 
 class Agent {
@@ -2128,6 +2186,8 @@ class Agent {
     this.rateLimitPattern = config.rateLimitPattern;
     /** @type {(string | RegExp | ((lines: string) => boolean))[]} */
     this.thinkingPatterns = config.thinkingPatterns || [];
+    /** @type {(string | RegExp)[]} */
+    this.activeWorkPatterns = config.activeWorkPatterns || [];
     /** @type {ConfirmPattern[]} */
     this.confirmPatterns = config.confirmPatterns || [];
     /** @type {UpdatePromptPatterns | null} */
@@ -2150,6 +2210,8 @@ class Agent {
     this.sessionIdFlag = config.sessionIdFlag || null;
     /** @type {((sessionName: string) => string | null) | null} */
     this.logPathFinder = config.logPathFinder || null;
+    /** @type {((entry: object) => string | null) | null} */
+    this.logEntryFormatter = config.logEntryFormatter || null;
   }
 
   /**
@@ -2290,6 +2352,18 @@ class Agent {
   }
 
   /**
+   * Format a log entry for streaming display.
+   * @param {object} entry
+   * @returns {string | null}
+   */
+  formatLogEntry(entry) {
+    if (this.logEntryFormatter) {
+      return this.logEntryFormatter(entry);
+    }
+    return null;
+  }
+
+  /**
    * @param {string} screen
    * @returns {string}
    */
@@ -2299,6 +2373,7 @@ class Agent {
       spinners: this.spinners,
       rateLimitPattern: this.rateLimitPattern,
       thinkingPatterns: this.thinkingPatterns,
+      activeWorkPatterns: this.activeWorkPatterns,
       confirmPatterns: this.confirmPatterns,
       updatePromptPatterns: this.updatePromptPatterns,
     });
@@ -2528,11 +2603,13 @@ const CodexAgent = new Agent({
     screen: ["Update available"],
     lastLines: ["Skip"],
   },
+  activeWorkPatterns: ["esc to interrupt"],
   responseMarkers: ["•", "- ", "**"],
   chromePatterns: ["context left", "for shortcuts"],
   reviewOptions: { pr: "1", uncommitted: "2", commit: "3", custom: "4" },
   envVar: "AX_SESSION",
   logPathFinder: findCodexLogPath,
+  logEntryFormatter: formatCodexLogEntry,
 });
 
 // =============================================================================
@@ -2550,6 +2627,7 @@ const ClaudeAgent = new Agent({
   rateLimitPattern: /rate.?limit/i,
   // Claude uses whimsical verbs like "Wibbling…", "Dancing…", etc. Match any capitalized -ing word + ellipsis (… or ...)
   thinkingPatterns: ["Thinking", /[A-Z][a-z]+ing(…|\.\.\.)/],
+  activeWorkPatterns: ["[Pasted text"],
   confirmPatterns: [
     "Do you want to make this edit",
     "Do you want to run this command",
@@ -2581,6 +2659,7 @@ const ClaudeAgent = new Agent({
     if (uuid) return findClaudeLogPath(uuid, sessionName);
     return null;
   },
+  logEntryFormatter: formatClaudeLogEntry,
 });
 
 // =============================================================================
@@ -2718,20 +2797,33 @@ async function streamResponse(agent, session, timeoutMs = DEFAULT_TIMEOUT_MS) {
   let logPath = agent.findLogPath(session);
   let logOffset = logPath && existsSync(logPath) ? statSync(logPath).size : 0;
   let printedThinking = false;
+  /** @type {string | null} Track last assistant message to dedupe final response */
+  let lastAssistantMessage = null;
 
   const streamNewEntries = () => {
     if (!logPath) {
       logPath = agent.findLogPath(session);
       if (logPath && existsSync(logPath)) {
-        logOffset = statSync(logPath).size;
+        // Read from beginning when file is first discovered
+        // (Claude creates log file when first message is sent)
+        logOffset = 0;
       }
     }
     if (logPath) {
       const { entries, newOffset } = tailJsonl(logPath, logOffset);
       logOffset = newOffset;
       for (const entry of entries) {
-        const formatted = formatEntry(entry);
-        if (formatted) console.log(formatted);
+        const formatted = agent.formatLogEntry(entry);
+        if (!formatted) continue;
+
+        // Dedupe assistant messages (streaming agent_message vs final response_item)
+        // Tool calls (starting with ">") are always printed
+        if (!formatted.startsWith(">")) {
+          if (formatted === lastAssistantMessage) continue;
+          lastAssistantMessage = formatted;
+        }
+
+        console.log(formatted);
       }
     }
   };
@@ -5039,4 +5131,8 @@ export {
   State,
   normalizeAllowedTools,
   computePermissionHash,
+  formatClaudeLogEntry,
+  formatCodexLogEntry,
+  CodexAgent,
+  ClaudeAgent,
 };

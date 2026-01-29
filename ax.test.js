@@ -17,6 +17,10 @@ import {
   parseCliArgs,
   normalizeAllowedTools,
   computePermissionHash,
+  formatClaudeLogEntry,
+  formatCodexLogEntry,
+  CodexAgent,
+  ClaudeAgent,
 } from "./ax.js";
 
 // =============================================================================
@@ -474,34 +478,9 @@ describe("extractThinking", () => {
 // detectState - the core state machine
 // =============================================================================
 
-// Claude-like config for testing
-const claudeConfig = {
-  promptSymbol: "❯",
-  spinners: ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"],
-  rateLimitPattern: /rate.?limit/i,
-  thinkingPatterns: ["Thinking"],
-  confirmPatterns: [
-    "Do you want to proceed",
-    (lines) => /\d+\.\s*(Yes|No|Allow|Deny)/i.test(lines),
-  ],
-  updatePromptPatterns: null,
-};
-
-// Codex-like config for testing
-const codexConfig = {
-  promptSymbol: "›",
-  spinners: ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"],
-  rateLimitPattern: /■.*(?:usage limit|rate limit|try again at)/i,
-  thinkingPatterns: ["Thinking…", "Thinking..."],
-  confirmPatterns: [
-    (lines) => lines.includes("[y]") && lines.includes("[n]"),
-    "Run command?",
-  ],
-  updatePromptPatterns: {
-    screen: ["Update available"],
-    lastLines: ["Skip"],
-  },
-};
+// Use real agent configs for testing (no duplication)
+const claudeConfig = ClaudeAgent;
+const codexConfig = CodexAgent;
 
 describe("detectState", () => {
   describe("STARTING state", () => {
@@ -541,15 +520,20 @@ Some response from Codex
       const screen = `Previous output
 
 ❯ [Pasted text +500 lines]`;
-      assert.strictEqual(detectState(screen, claudeConfig), State.STARTING);
+      // With activeWorkPatterns (claudeConfig has it), [Pasted text triggers THINKING
+      assert.strictEqual(detectState(screen, claudeConfig), State.THINKING);
+      // Without activeWorkPatterns, prompt symbol causes READY
+      const configNoActiveWork = { ...claudeConfig, activeWorkPatterns: [] };
+      assert.strictEqual(detectState(screen, configNoActiveWork), State.READY);
     });
   });
 
   describe("THINKING state", () => {
     it("detects thinking from spinner character", () => {
+      // Claude uses ·✢✳✶✻✽ spinners, Codex uses braille ⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏
       const screen = `Working on your request
 
-⠋ Processing files...
+✢ Processing files...
 
 Some status`;
       assert.strictEqual(detectState(screen, claudeConfig), State.THINKING);
@@ -842,5 +826,310 @@ describe("parseCliArgs with --auto-approve", () => {
   it("auto-approve is undefined when not provided", () => {
     const result = parseCliArgs(["run tests"]);
     assert.strictEqual(result.flags.autoApprove, undefined);
+  });
+});
+
+// =============================================================================
+// formatClaudeLogEntry - Claude Code log entry formatting
+// =============================================================================
+
+describe("formatClaudeLogEntry", () => {
+  it("returns null for tool_result entries", () => {
+    const entry = { type: "tool_result", content: "some result" };
+    assert.strictEqual(formatClaudeLogEntry(entry), null);
+  });
+
+  it("returns null for non-assistant entries", () => {
+    const entry = { type: "user", message: { content: [{ type: "text", text: "hello" }] } };
+    assert.strictEqual(formatClaudeLogEntry(entry), null);
+  });
+
+  it("extracts text from assistant entry", () => {
+    const entry = {
+      type: "assistant",
+      message: { content: [{ type: "text", text: "Hello world" }] },
+    };
+    assert.strictEqual(formatClaudeLogEntry(entry), "Hello world");
+  });
+
+  it("joins multiple text parts with newline", () => {
+    const entry = {
+      type: "assistant",
+      message: {
+        content: [
+          { type: "text", text: "Line 1" },
+          { type: "text", text: "Line 2" },
+        ],
+      },
+    };
+    assert.strictEqual(formatClaudeLogEntry(entry), "Line 1\nLine 2");
+  });
+
+  it("formats tool_use as summary", () => {
+    const entry = {
+      type: "assistant",
+      message: {
+        content: [{ type: "tool_use", name: "Read", input: { file_path: "/path/to/file.js" } }],
+      },
+    };
+    assert.strictEqual(formatClaudeLogEntry(entry), "> Read(file.js)");
+  });
+
+  it("formats Bash tool with command snippet", () => {
+    const entry = {
+      type: "assistant",
+      message: {
+        content: [{ type: "tool_use", name: "Bash", input: { command: "npm install && npm test" } }],
+      },
+    };
+    assert.strictEqual(formatClaudeLogEntry(entry), "> Bash(npm install && npm test)");
+  });
+
+  it("truncates long Bash commands", () => {
+    const longCommand = "a".repeat(100);
+    const entry = {
+      type: "assistant",
+      message: {
+        content: [{ type: "tool_use", name: "Bash", input: { command: longCommand } }],
+      },
+    };
+    const result = formatClaudeLogEntry(entry);
+    assert.ok(result.startsWith("> Bash("));
+    assert.ok(result.length < 70); // 50 char command + "> Bash()"
+  });
+
+  it("handles tool_call type (alternative format)", () => {
+    const entry = {
+      type: "assistant",
+      message: {
+        content: [{ type: "tool_call", tool: "Grep", arguments: { pattern: "TODO" } }],
+      },
+    };
+    // pattern field is extracted as target
+    assert.strictEqual(formatClaudeLogEntry(entry), "> Grep(TODO)");
+  });
+
+  it("returns null for empty content", () => {
+    const entry = { type: "assistant", message: { content: [] } };
+    assert.strictEqual(formatClaudeLogEntry(entry), null);
+  });
+
+  it("skips thinking blocks", () => {
+    const entry = {
+      type: "assistant",
+      message: {
+        content: [
+          { type: "thinking", thinking: "Let me think..." },
+          { type: "text", text: "Here's my answer" },
+        ],
+      },
+    };
+    assert.strictEqual(formatClaudeLogEntry(entry), "Here's my answer");
+  });
+});
+
+// =============================================================================
+// formatCodexLogEntry - Codex log entry formatting
+// =============================================================================
+
+describe("formatCodexLogEntry", () => {
+  it("returns null for function_call_output entries", () => {
+    const entry = {
+      type: "response_item",
+      payload: { type: "function_call_output", output: "result" },
+    };
+    assert.strictEqual(formatCodexLogEntry(entry), null);
+  });
+
+  it("formats function_call with shell_command", () => {
+    const entry = {
+      type: "response_item",
+      payload: {
+        type: "function_call",
+        name: "shell_command",
+        arguments: JSON.stringify({ command: "git status", workdir: "/test" }),
+      },
+    };
+    assert.strictEqual(formatCodexLogEntry(entry), "> shell_command(git status)");
+  });
+
+  it("formats function_call with file path", () => {
+    const entry = {
+      type: "response_item",
+      payload: {
+        type: "function_call",
+        name: "read_file",
+        arguments: JSON.stringify({ file_path: "/path/to/file.js" }),
+      },
+    };
+    assert.strictEqual(formatCodexLogEntry(entry), "> read_file(file.js)");
+  });
+
+  it("handles malformed JSON in arguments", () => {
+    const entry = {
+      type: "response_item",
+      payload: {
+        type: "function_call",
+        name: "some_tool",
+        arguments: "not valid json",
+      },
+    };
+    assert.strictEqual(formatCodexLogEntry(entry), "> some_tool(...)");
+  });
+
+  it("extracts text from assistant message with output_text", () => {
+    const entry = {
+      type: "response_item",
+      payload: {
+        type: "message",
+        role: "assistant",
+        content: [{ type: "output_text", text: "Here is my response" }],
+      },
+    };
+    assert.strictEqual(formatCodexLogEntry(entry), "Here is my response");
+  });
+
+  it("extracts text from assistant message with text type", () => {
+    const entry = {
+      type: "response_item",
+      payload: {
+        type: "message",
+        role: "assistant",
+        content: [{ type: "text", text: "Alternative format" }],
+      },
+    };
+    assert.strictEqual(formatCodexLogEntry(entry), "Alternative format");
+  });
+
+  it("returns null for non-assistant messages", () => {
+    const entry = {
+      type: "response_item",
+      payload: {
+        type: "message",
+        role: "user",
+        content: [{ type: "input_text", text: "User message" }],
+      },
+    };
+    assert.strictEqual(formatCodexLogEntry(entry), null);
+  });
+
+  it("handles agent_message event for streaming", () => {
+    const entry = {
+      type: "event_msg",
+      payload: {
+        type: "agent_message",
+        message: "Streaming response text",
+      },
+    };
+    assert.strictEqual(formatCodexLogEntry(entry), "Streaming response text");
+  });
+
+  it("returns null for other event_msg types", () => {
+    const entry = {
+      type: "event_msg",
+      payload: { type: "token_count", count: 100 },
+    };
+    assert.strictEqual(formatCodexLogEntry(entry), null);
+  });
+
+  it("returns null for unknown entry types", () => {
+    const entry = { type: "session_meta", payload: { id: "123" } };
+    assert.strictEqual(formatCodexLogEntry(entry), null);
+  });
+
+  it("returns null for empty assistant content", () => {
+    const entry = {
+      type: "response_item",
+      payload: { type: "message", role: "assistant", content: [] },
+    };
+    assert.strictEqual(formatCodexLogEntry(entry), null);
+  });
+});
+
+// =============================================================================
+// detectState with activeWorkPatterns
+// =============================================================================
+
+describe("detectState with activeWorkPatterns", () => {
+  const codexConfigWithActiveWork = {
+    promptSymbol: "›",
+    spinners: [],
+    thinkingPatterns: ["Thinking…"],
+    activeWorkPatterns: ["esc to interrupt"],
+    confirmPatterns: [],
+    updatePromptPatterns: null,
+  };
+
+  const claudeConfigWithActiveWork = {
+    promptSymbol: "❯",
+    spinners: [],
+    thinkingPatterns: ["Thinking"],
+    activeWorkPatterns: ["[Pasted text"],
+    confirmPatterns: [],
+    updatePromptPatterns: null,
+  };
+
+  it("detects THINKING when activeWorkPattern matches (Codex)", () => {
+    const screen = `Working on your request
+
+• Planning approach (5s • esc to interrupt)
+
+› Implement {feature}`;
+    assert.strictEqual(detectState(screen, codexConfigWithActiveWork), State.THINKING);
+  });
+
+  it("detects READY when no activeWorkPattern matches (Codex)", () => {
+    const screen = `Done with the task
+
+› `;
+    assert.strictEqual(detectState(screen, codexConfigWithActiveWork), State.READY);
+  });
+
+  it("detects THINKING when activeWorkPattern matches (Claude)", () => {
+    const screen = `Processing your input
+
+❯ [Pasted text +500 lines]`;
+    assert.strictEqual(detectState(screen, claudeConfigWithActiveWork), State.THINKING);
+  });
+
+  it("detects READY when no activeWorkPattern matches (Claude)", () => {
+    const screen = `Here's my response
+
+❯ `;
+    assert.strictEqual(detectState(screen, claudeConfigWithActiveWork), State.READY);
+  });
+
+  it("activeWorkPatterns supports regex", () => {
+    const configWithRegex = {
+      ...codexConfigWithActiveWork,
+      activeWorkPatterns: [/\d+s • esc/],
+    };
+    const screen = `Working
+
+• Thinking (15s • esc to interrupt)
+
+› template`;
+    assert.strictEqual(detectState(screen, configWithRegex), State.THINKING);
+  });
+
+  it("activeWorkPatterns takes priority over prompt symbol", () => {
+    // Even though prompt symbol is present, activeWorkPattern should win
+    const screen = `Processing
+
+• Working (3s • esc to interrupt)
+
+› `;
+    assert.strictEqual(detectState(screen, codexConfigWithActiveWork), State.THINKING);
+  });
+
+  it("empty activeWorkPatterns allows normal READY detection", () => {
+    const configNoActiveWork = {
+      ...codexConfigWithActiveWork,
+      activeWorkPatterns: [],
+    };
+    const screen = `Some output
+
+› `;
+    assert.strictEqual(detectState(screen, configNoActiveWork), State.READY);
   });
 });
