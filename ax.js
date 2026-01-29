@@ -144,6 +144,15 @@ function debugError(context, err) {
   if (DEBUG) console.error(`[debug:${context}]`, err instanceof Error ? err.message : err);
 }
 
+/**
+ * Log debug message when AX_DEBUG=1
+ * @param {string} tag - Short tag for the debug message (e.g., "poll", "tmux")
+ * @param {string} message - The debug message
+ */
+function debug(tag, message) {
+  if (DEBUG) console.error(`[${tag}] ${message}`);
+}
+
 // =============================================================================
 // Project root detection (walk up to find .ai/ directory)
 // =============================================================================
@@ -214,6 +223,7 @@ function tmuxCapture(session, scrollback = 0) {
  * @param {string} keys
  */
 function tmuxSend(session, keys) {
+  debug("tmux", `send session=${session}, keys=${keys}`);
   tmux(["send-keys", "-t", session, keys]);
 }
 
@@ -222,6 +232,7 @@ function tmuxSend(session, keys) {
  * @param {string} text
  */
 function tmuxSendLiteral(session, text) {
+  debug("tmux", `sendLiteral session=${session}, text=${text.slice(0, 50)}...`);
   tmux(["send-keys", "-t", session, "-l", text]);
 }
 
@@ -711,6 +722,7 @@ function findClaudeLogPath(sessionId, sessionName) {
   const cwd = (sessionName && getTmuxSessionCwd(sessionName)) || process.cwd();
   const projectPath = getClaudeProjectPath(cwd);
   const claudeProjectDir = path.join(CLAUDE_CONFIG_DIR, "projects", projectPath);
+  debug("log", `findClaudeLogPath: sessionId=${sessionId}, projectDir=${claudeProjectDir}`);
 
   // Check sessions-index.json first
   const indexPath = path.join(claudeProjectDir, "sessions-index.json");
@@ -720,7 +732,10 @@ function findClaudeLogPath(sessionId, sessionName) {
       const entry = index.entries?.find(
         /** @param {{sessionId: string, fullPath?: string}} e */ (e) => e.sessionId === sessionId,
       );
-      if (entry?.fullPath) return entry.fullPath;
+      if (entry?.fullPath) {
+        debug("log", `findClaudeLogPath: found via index -> ${entry.fullPath}`);
+        return entry.fullPath;
+      }
     } catch (err) {
       debugError("findClaudeLogPath", err);
     }
@@ -728,8 +743,12 @@ function findClaudeLogPath(sessionId, sessionName) {
 
   // Fallback: direct path
   const directPath = path.join(claudeProjectDir, `${sessionId}.jsonl`);
-  if (existsSync(directPath)) return directPath;
+  if (existsSync(directPath)) {
+    debug("log", `findClaudeLogPath: found via direct path -> ${directPath}`);
+    return directPath;
+  }
 
+  debug("log", `findClaudeLogPath: not found`);
   return null;
 }
 
@@ -738,6 +757,7 @@ function findClaudeLogPath(sessionId, sessionName) {
  * @returns {string | null}
  */
 function findCodexLogPath(sessionName) {
+  debug("log", `findCodexLogPath: sessionName=${sessionName}`);
   // For Codex, we need to match by timing since we can't control the session ID
   // Get tmux session creation time
   try {
@@ -748,13 +768,22 @@ function findCodexLogPath(sessionName) {
         encoding: "utf-8",
       },
     );
-    if (result.status !== 0) return null;
+    if (result.status !== 0) {
+      debug("log", `findCodexLogPath: tmux display-message failed`);
+      return null;
+    }
     const createdTs = parseInt(result.stdout.trim(), 10) * 1000; // tmux gives seconds, we need ms
-    if (isNaN(createdTs)) return null;
+    if (isNaN(createdTs)) {
+      debug("log", `findCodexLogPath: invalid timestamp`);
+      return null;
+    }
 
     // Codex stores sessions in ~/.codex/sessions/YYYY/MM/DD/rollout-TIMESTAMP-UUID.jsonl
     const sessionsDir = path.join(CODEX_CONFIG_DIR, "sessions");
-    if (!existsSync(sessionsDir)) return null;
+    if (!existsSync(sessionsDir)) {
+      debug("log", `findCodexLogPath: sessions dir not found`);
+      return null;
+    }
 
     const startDate = new Date(createdTs);
     const year = startDate.getFullYear().toString();
@@ -762,11 +791,15 @@ function findCodexLogPath(sessionName) {
     const day = String(startDate.getDate()).padStart(2, "0");
 
     const dayDir = path.join(sessionsDir, year, month, day);
-    if (!existsSync(dayDir)) return null;
+    if (!existsSync(dayDir)) {
+      debug("log", `findCodexLogPath: day dir not found: ${dayDir}`);
+      return null;
+    }
 
     // Find the closest log file created after the tmux session started
     // Use 60-second window to handle slow startups (model download, first run, heavy load)
     const files = readdirSync(dayDir).filter((f) => f.endsWith(".jsonl"));
+    debug("log", `findCodexLogPath: ${files.length} jsonl files in ${dayDir}`);
     const candidates = [];
 
     for (const file of files) {
@@ -789,11 +822,16 @@ function findCodexLogPath(sessionName) {
       }
     }
 
-    if (candidates.length === 0) return null;
+    if (candidates.length === 0) {
+      debug("log", `findCodexLogPath: no candidates within time window`);
+      return null;
+    }
     // Return the closest match
     candidates.sort((a, b) => a.diff - b.diff);
+    debug("log", `findCodexLogPath: found ${candidates.length} candidates, best: ${candidates[0].path}`);
     return candidates[0].path;
   } catch {
+    debug("log", `findCodexLogPath: exception caught`);
     return null;
   }
 }
@@ -995,6 +1033,9 @@ function formatClaudeLogEntry(entry) {
   for (const part of parts) {
     if (part.type === "text" && part.text) {
       output.push(part.text);
+    } else if (part.type === "thinking" && part.thinking) {
+      // Include thinking blocks - extended thinking models put responses here
+      output.push(part.thinking);
     } else if (part.type === "tool_use" || part.type === "tool_call") {
       const name = part.name || part.tool || "tool";
       const input = part.input || part.arguments || {};
@@ -1007,7 +1048,6 @@ function formatClaudeLogEntry(entry) {
       }
       output.push(`> ${name}(${summary})`);
     }
-    // Skip thinking blocks - internal reasoning
   }
 
   return output.length > 0 ? output.join("\n") : null;
@@ -1061,6 +1101,11 @@ function formatCodexLogEntry(entry) {
   // Handle streaming agent messages
   if (entry.type === "event_msg" && entry.payload?.type === "agent_message") {
     return entry.payload.message || null;
+  }
+
+  // Handle agent reasoning (thinking during review)
+  if (entry.type === "event_msg" && entry.payload?.type === "agent_reasoning") {
+    return entry.payload.text || null;
   }
 
   return null;
@@ -1129,16 +1174,23 @@ function resolveSessionName(partial) {
 
   const sessions = tmuxListSessions();
   const agentSessions = sessions.filter((s) => parseSessionName(s));
+  debug("session", `resolving "${partial}" from ${agentSessions.length} agent sessions`);
 
   // Exact match
-  if (agentSessions.includes(partial)) return partial;
+  if (agentSessions.includes(partial)) {
+    debug("session", `exact match: ${partial}`);
+    return partial;
+  }
 
   // Archangel name match (e.g., "reviewer" matches "claude-archangel-reviewer-uuid")
   const archangelMatches = agentSessions.filter((s) => {
     const parsed = parseSessionName(s);
     return parsed?.archangelName === partial;
   });
-  if (archangelMatches.length === 1) return archangelMatches[0];
+  if (archangelMatches.length === 1) {
+    debug("session", `archangel match: ${archangelMatches[0]}`);
+    return archangelMatches[0];
+  }
   if (archangelMatches.length > 1) {
     console.log("ERROR: ambiguous archangel name. Matches:");
     for (const m of archangelMatches) console.log(`  ${m}`);
@@ -1147,7 +1199,10 @@ function resolveSessionName(partial) {
 
   // Prefix match
   const matches = agentSessions.filter((s) => s.startsWith(partial));
-  if (matches.length === 1) return matches[0];
+  if (matches.length === 1) {
+    debug("session", `prefix match: ${matches[0]}`);
+    return matches[0];
+  }
   if (matches.length > 1) {
     console.log("ERROR: ambiguous session prefix. Matches:");
     for (const m of matches) console.log(`  ${m}`);
@@ -1159,13 +1214,17 @@ function resolveSessionName(partial) {
     const parsed = parseSessionName(s);
     return parsed?.uuid?.startsWith(partial);
   });
-  if (uuidMatches.length === 1) return uuidMatches[0];
+  if (uuidMatches.length === 1) {
+    debug("session", `UUID match: ${uuidMatches[0]}`);
+    return uuidMatches[0];
+  }
   if (uuidMatches.length > 1) {
     console.log("ERROR: ambiguous UUID prefix. Matches:");
     for (const m of uuidMatches) console.log(`  ${m}`);
     process.exit(1);
   }
 
+  debug("session", `no match found, returning as-is: ${partial}`);
   return partial; // Return as-is, let caller handle not found
 }
 
@@ -2045,7 +2104,10 @@ const State = {
  * @returns {string} The detected state
  */
 function detectState(screen, config) {
-  if (!screen) return State.STARTING;
+  if (!screen) {
+    debug("state", "no screen -> STARTING");
+    return State.STARTING;
+  }
 
   const lines = screen.trim().split("\n");
   const lastLines = lines.slice(-8).join("\n");
@@ -2054,6 +2116,7 @@ function detectState(screen, config) {
 
   // Rate limited - check recent lines (not full screen to avoid matching historical output)
   if (config.rateLimitPattern && config.rateLimitPattern.test(recentLines)) {
+    debug("state", "rateLimitPattern matched -> RATE_LIMITED");
     return State.RATE_LIMITED;
   }
 
@@ -2065,6 +2128,7 @@ function detectState(screen, config) {
     /3:\s*Good/i.test(recentLines) &&
     /0:\s*Dismiss/i.test(recentLines)
   ) {
+    debug("state", "feedback modal detected -> FEEDBACK_MODAL");
     return State.FEEDBACK_MODAL;
   }
 
@@ -2073,56 +2137,71 @@ function detectState(screen, config) {
   for (const pattern of confirmPatterns) {
     if (typeof pattern === "function") {
       // Functions check lastLines first (most specific), then recentLines
-      if (pattern(lastLines)) return State.CONFIRMING;
-      if (pattern(recentLines)) return State.CONFIRMING;
+      if (pattern(lastLines)) {
+        debug("state", "confirmPattern function matched lastLines -> CONFIRMING");
+        return State.CONFIRMING;
+      }
+      if (pattern(recentLines)) {
+        debug("state", "confirmPattern function matched recentLines -> CONFIRMING");
+        return State.CONFIRMING;
+      }
     } else {
       // String patterns check recentLines (bounded range)
-      if (recentLines.includes(pattern)) return State.CONFIRMING;
+      if (recentLines.includes(pattern)) {
+        debug("state", `confirmPattern "${pattern}" matched -> CONFIRMING`);
+        return State.CONFIRMING;
+      }
     }
   }
 
   // Check for active work patterns first (agent shows prompt even while working)
   const activeWorkPatterns = config.activeWorkPatterns || [];
-  if (
-    activeWorkPatterns.some((p) => {
-      if (p instanceof RegExp) return p.test(lastLines);
-      return lastLines.includes(p);
-    })
-  ) {
-    return State.THINKING;
+  for (const p of activeWorkPatterns) {
+    const matched = p instanceof RegExp ? p.test(lastLines) : lastLines.includes(p);
+    if (matched) {
+      debug("state", `activeWorkPattern "${p}" matched -> THINKING`);
+      return State.THINKING;
+    }
   }
 
   // Ready - check BEFORE thinking to avoid false positives from timing messages like "✻ Worked for 45s"
   // If the prompt symbol is visible, the agent is ready regardless of spinner characters in timing messages
   if (lastLines.includes(config.promptSymbol)) {
+    debug("state", `promptSymbol "${config.promptSymbol}" found -> READY`);
     return State.READY;
   }
 
   // Thinking - spinners (check last lines only)
   const spinners = config.spinners || [];
-  if (spinners.some((s) => lastLines.includes(s))) {
-    return State.THINKING;
+  for (const s of spinners) {
+    if (lastLines.includes(s)) {
+      debug("state", `spinner "${s}" matched -> THINKING`);
+      return State.THINKING;
+    }
   }
   // Thinking - text patterns (last lines) - supports strings, regexes, and functions
   const thinkingPatterns = config.thinkingPatterns || [];
-  if (
-    thinkingPatterns.some((p) => {
-      if (typeof p === "function") return p(lastLines);
-      if (p instanceof RegExp) return p.test(lastLines);
-      return lastLines.includes(p);
-    })
-  ) {
-    return State.THINKING;
+  for (const p of thinkingPatterns) {
+    let matched = false;
+    if (typeof p === "function") matched = p(lastLines);
+    else if (p instanceof RegExp) matched = p.test(lastLines);
+    else matched = lastLines.includes(p);
+    if (matched) {
+      debug("state", `thinkingPattern "${p}" matched -> THINKING`);
+      return State.THINKING;
+    }
   }
 
   // Update prompt
   if (config.updatePromptPatterns) {
     const { screen: sp, lastLines: lp } = config.updatePromptPatterns;
     if (sp && sp.some((p) => screen.includes(p)) && lp && lp.some((p) => lastLines.includes(p))) {
+      debug("state", "updatePromptPatterns matched -> UPDATE_PROMPT");
       return State.UPDATE_PROMPT;
     }
   }
 
+  debug("state", "no patterns matched -> STARTING");
   return State.STARTING;
 }
 
@@ -2606,7 +2685,7 @@ const CodexAgent = new Agent({
   activeWorkPatterns: ["esc to interrupt"],
   responseMarkers: ["•", "- ", "**"],
   chromePatterns: ["context left", "for shortcuts"],
-  reviewOptions: { pr: "1", uncommitted: "2", commit: "3", custom: "4" },
+  reviewOptions: { uncommitted: "2", custom: "4" },
   envVar: "AX_SESSION",
   logPathFinder: findCodexLogPath,
   logEntryFormatter: formatCodexLogEntry,
@@ -2627,7 +2706,7 @@ const ClaudeAgent = new Agent({
   rateLimitPattern: /rate.?limit/i,
   // Claude uses whimsical verbs like "Wibbling…", "Dancing…", etc. Match any capitalized -ing word + ellipsis (… or ...)
   thinkingPatterns: ["Thinking", /[A-Z][a-z]+ing(…|\.\.\.)/],
-  activeWorkPatterns: ["[Pasted text"],
+  activeWorkPatterns: ["[Pasted text", "esc to interrupt"],
   confirmPatterns: [
     "Do you want to make this edit",
     "Do you want to run this command",
@@ -2723,11 +2802,19 @@ async function pollForResponse(agent, session, timeoutMs, hooks = {}) {
   const { onPoll, onStateChange, onReady } = hooks;
   const start = Date.now();
   const initialScreen = tmuxCapture(session);
+  const initialState = agent.getState(initialScreen);
+  debug("poll", `start: initialState=${initialState}, timeoutMs=${timeoutMs}`);
 
   let lastScreen = initialScreen;
   let lastState = null;
   let stableAt = null;
   let sawActivity = false;
+  let sawThinking = false;
+
+  // Fallback timeout: accept READY without sawThinking after this many ms
+  // This handles fast responses where we might miss the THINKING state
+  // Clamp to timeoutMs so short timeouts don't always fail
+  const THINKING_FALLBACK_MS = Math.min(10000, timeoutMs);
 
   while (Date.now() - start < timeoutMs) {
     const screen = tmuxCapture(session);
@@ -2755,19 +2842,28 @@ async function pollForResponse(agent, session, timeoutMs, hooks = {}) {
       lastScreen = screen;
       stableAt = Date.now();
       if (screen !== initialScreen) {
+        if (!sawActivity) debug("poll", "sawActivity=true (screen changed from initial)");
         sawActivity = true;
       }
     }
 
+    // Check if we can return READY
     if (sawActivity && stableAt && Date.now() - stableAt >= STABLE_MS) {
       if (state === State.READY) {
-        if (onReady) onReady(screen);
-        return { state, screen };
+        // Require sawThinking OR enough time has passed (fallback for fast responses)
+        const elapsed = Date.now() - start;
+        if (sawThinking || elapsed >= THINKING_FALLBACK_MS) {
+          debug("poll", `returning READY after ${elapsed}ms (sawThinking=${sawThinking})`);
+          if (onReady) onReady(screen);
+          return { state, screen };
+        }
       }
     }
 
     if (state === State.THINKING) {
       sawActivity = true;
+      if (!sawThinking) debug("poll", "sawThinking=true");
+      sawThinking = true;
     }
 
     await sleep(POLL_MS);
@@ -2797,8 +2893,13 @@ async function streamResponse(agent, session, timeoutMs = DEFAULT_TIMEOUT_MS) {
   let logPath = agent.findLogPath(session);
   let logOffset = logPath && existsSync(logPath) ? statSync(logPath).size : 0;
   let printedThinking = false;
-  /** @type {string | null} Track last assistant message to dedupe final response */
-  let lastAssistantMessage = null;
+  debug("stream", `start: logPath=${logPath || "null"}, logOffset=${logOffset}`);
+  // Sliding window for deduplication - only dedupe recent messages
+  // This catches Codex's duplicate log entries (A,B,A,B pattern) while
+  // allowing legitimate repeated messages across turns
+  /** @type {string[]} */
+  const recentMessages = [];
+  const DEDUPE_WINDOW = 10;
 
   const streamNewEntries = () => {
     if (!logPath) {
@@ -2806,21 +2907,26 @@ async function streamResponse(agent, session, timeoutMs = DEFAULT_TIMEOUT_MS) {
       if (logPath && existsSync(logPath)) {
         // Read from beginning when file is first discovered
         // (Claude creates log file when first message is sent)
+        debug("stream", `log file discovered: ${logPath}`);
         logOffset = 0;
       }
     }
     if (logPath) {
       const { entries, newOffset } = tailJsonl(logPath, logOffset);
+      if (entries.length > 0) {
+        debug("stream", `read ${entries.length} entries, offset ${logOffset} -> ${newOffset}`);
+      }
       logOffset = newOffset;
       for (const entry of entries) {
         const formatted = agent.formatLogEntry(entry);
         if (!formatted) continue;
 
-        // Dedupe assistant messages (streaming agent_message vs final response_item)
+        // Dedupe messages within sliding window (Codex logs can contain duplicates)
         // Tool calls (starting with ">") are always printed
         if (!formatted.startsWith(">")) {
-          if (formatted === lastAssistantMessage) continue;
-          lastAssistantMessage = formatted;
+          if (recentMessages.includes(formatted)) continue;
+          recentMessages.push(formatted);
+          if (recentMessages.length > DEDUPE_WINDOW) recentMessages.shift();
         }
 
         console.log(formatted);
@@ -2892,9 +2998,13 @@ async function cmdStart(agent, session, { yolo = false, allowedTools = null } = 
   // Generate session name if not provided
   if (!session) {
     session = agent.generateSession({ allowedTools, yolo });
+    debug("session", `generated new session: ${session}`);
   }
 
-  if (tmuxHasSession(session)) return session;
+  if (tmuxHasSession(session)) {
+    debug("session", `reusing existing session: ${session}`);
+    return session;
+  }
 
   // Check agent CLI is installed before trying to start
   const cliCheck = spawnSync("which", [agent.name], { encoding: "utf-8" });
@@ -2904,6 +3014,7 @@ async function cmdStart(agent, session, { yolo = false, allowedTools = null } = 
   }
 
   const command = agent.getCommand(yolo, session, allowedTools);
+  debug("session", `creating tmux session: ${session}`);
   tmuxNewSession(session, command);
 
   const start = Date.now();
@@ -4383,7 +4494,7 @@ async function cmdAsk(
     : await cmdStart(agent, session, { yolo, allowedTools });
 
   tmuxSendLiteral(activeSession, message);
-  await sleep(50);
+  await sleep(200);
   tmuxSend(activeSession, "Enter");
 
   if (noWait) {
@@ -4514,6 +4625,13 @@ async function cmdReview(
   customInstructions,
   { wait = true, yolo = false, fresh = false, timeoutMs = REVIEW_TIMEOUT_MS } = {},
 ) {
+  const validOptions = ["uncommitted", "custom"];
+  if (option && !validOptions.includes(option)) {
+    console.error(`Unknown review option: ${option}`);
+    console.error(`Valid options: ${validOptions.join(", ")}`);
+    process.exit(1);
+  }
+
   const sessionExists = session != null && tmuxHasSession(session);
 
   // Reset conversation if --fresh and session exists
@@ -4528,12 +4646,11 @@ async function cmdReview(
   if (!agent.reviewOptions) {
     /** @type {Record<string, string>} */
     const reviewPrompts = {
-      pr: "Review the current PR.",
       uncommitted: "Review uncommitted changes.",
-      commit: "Review the most recent git commit.",
       custom: customInstructions || "Review the code.",
     };
-    const prompt = (option && reviewPrompts[option]) || reviewPrompts.commit;
+    const prompt = (option && reviewPrompts[option]) || reviewPrompts.uncommitted;
+    debug("review", `Claude path: noWait=${!wait}, timeoutMs=${timeoutMs}`);
     return cmdAsk(agent, session, prompt, { noWait: !wait, yolo, timeoutMs });
   }
 
@@ -4864,7 +4981,7 @@ Usage: ${name} [OPTIONS] <command|message> [ARGS...]
 
 Messaging:
   <message>                 Send message to ${name}
-  review [TYPE]             Review code: pr, uncommitted, commit, custom
+  review [TYPE]             Review code: uncommitted, custom
 
 Sessions:
   compact                   Summarise session to shrink context size
@@ -5044,9 +5161,9 @@ async function main() {
   if (cmd === "review") {
     const customInstructions = await readStdinIfNeeded(positionals[2]);
     return cmdReview(agent, session, positionals[1], customInstructions ?? undefined, {
-      wait,
+      wait: !noWait,
       fresh,
-      timeoutMs,
+      timeoutMs: flags.timeout !== undefined ? timeoutMs : REVIEW_TIMEOUT_MS,
     });
   }
   if (cmd === "status") return cmdStatus(agent, session);
