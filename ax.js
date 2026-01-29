@@ -2164,8 +2164,8 @@ class Agent {
       base = this.yoloCommand;
     } else if (customAllowedTools) {
       // Custom permissions from --auto-approve flag
-      // Escape quotes for shell since tmux runs the command through a shell
-      const escaped = customAllowedTools.replace(/"/g, '\\"');
+      // Escape for shell: backslashes first, then double quotes
+      const escaped = customAllowedTools.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
       base = `${this.startCommand} --allowedTools "${escaped}"`;
     } else if (this.safeAllowedTools) {
       // Default: auto-approve safe read-only operations
@@ -2883,6 +2883,7 @@ function cmdAgents() {
     const isDefault =
       (parsed.tool === "claude" && session === claudeDefault) ||
       (parsed.tool === "codex" && session === codexDefault);
+    const perms = getSessionPermissions(session);
 
     // Get session metadata (Claude only)
     const meta = getSessionMeta(session);
@@ -2893,6 +2894,7 @@ function cmdAgents() {
       state: state || "unknown",
       target: isDefault ? "*" : "",
       type,
+      mode: perms.mode,
       plan: meta?.slug || "-",
       branch: meta?.gitBranch || "-",
     };
@@ -2904,14 +2906,15 @@ function cmdAgents() {
   const maxState = Math.max(5, ...agents.map((a) => a.state.length));
   const maxTarget = Math.max(6, ...agents.map((a) => a.target.length));
   const maxType = Math.max(4, ...agents.map((a) => a.type.length));
+  const maxMode = Math.max(4, ...agents.map((a) => a.mode.length));
   const maxPlan = Math.max(4, ...agents.map((a) => a.plan.length));
 
   console.log(
-    `${"SESSION".padEnd(maxSession)}  ${"TOOL".padEnd(maxTool)}  ${"STATE".padEnd(maxState)}  ${"TARGET".padEnd(maxTarget)}  ${"TYPE".padEnd(maxType)}  ${"PLAN".padEnd(maxPlan)}  BRANCH`,
+    `${"SESSION".padEnd(maxSession)}  ${"TOOL".padEnd(maxTool)}  ${"STATE".padEnd(maxState)}  ${"TARGET".padEnd(maxTarget)}  ${"TYPE".padEnd(maxType)}  ${"MODE".padEnd(maxMode)}  ${"PLAN".padEnd(maxPlan)}  BRANCH`,
   );
   for (const a of agents) {
     console.log(
-      `${a.session.padEnd(maxSession)}  ${a.tool.padEnd(maxTool)}  ${a.state.padEnd(maxState)}  ${a.target.padEnd(maxTarget)}  ${a.type.padEnd(maxType)}  ${a.plan.padEnd(maxPlan)}  ${a.branch}`,
+      `${a.session.padEnd(maxSession)}  ${a.tool.padEnd(maxTool)}  ${a.state.padEnd(maxState)}  ${a.target.padEnd(maxTarget)}  ${a.type.padEnd(maxType)}  ${a.mode.padEnd(maxMode)}  ${a.plan.padEnd(maxPlan)}  ${a.branch}`,
     );
   }
 
@@ -3665,7 +3668,7 @@ function cmdKill(session, { all = false, orphans = false, force = false } = {}) 
   // If specific session provided, kill just that one
   if (session) {
     if (!tmuxHasSession(session)) {
-      console.log("ERROR: session not found");
+      console.log("ERROR: session not found. Run 'ax agents' to list sessions.");
       process.exit(1);
     }
     tmuxKill(session);
@@ -3716,7 +3719,7 @@ function cmdAttach(session) {
   // Resolve partial session name
   const resolved = resolveSessionName(session);
   if (!resolved || !tmuxHasSession(resolved)) {
-    console.log("ERROR: session not found");
+    console.log("ERROR: session not found. Run 'ax agents' to list sessions.");
     process.exit(1);
   }
 
@@ -3740,7 +3743,7 @@ function cmdLog(sessionName, { tail = 50, reasoning = false, follow = false } = 
   // Resolve partial session name
   const resolved = resolveSessionName(sessionName);
   if (!resolved) {
-    console.log("ERROR: session not found");
+    console.log("ERROR: session not found. Run 'ax agents' to list sessions.");
     process.exit(1);
   }
   const parsed = parseSessionName(resolved);
@@ -4864,6 +4867,12 @@ async function main() {
   });
   if (agentError) {
     console.log(`ERROR: ${agentError}`);
+    process.exit(1);
+  }
+
+  // Validate --auto-approve is only used with Claude (Codex doesn't support --allowedTools)
+  if (autoApprove && agent.name === "codex") {
+    console.log("ERROR: --auto-approve is not supported by Codex. Use --yolo instead.");
     process.exit(1);
   }
 
