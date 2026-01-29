@@ -2685,7 +2685,7 @@ const CodexAgent = new Agent({
   activeWorkPatterns: ["esc to interrupt"],
   responseMarkers: ["•", "- ", "**"],
   chromePatterns: ["context left", "for shortcuts"],
-  reviewOptions: { uncommitted: "2", custom: "4" },
+  reviewOptions: { branch: "1", uncommitted: "2", commit: "3", custom: "4" },
   envVar: "AX_SESSION",
   logPathFinder: findCodexLogPath,
   logEntryFormatter: formatCodexLogEntry,
@@ -4625,7 +4625,7 @@ async function cmdReview(
   customInstructions,
   { wait = true, yolo = false, fresh = false, timeoutMs = REVIEW_TIMEOUT_MS } = {},
 ) {
-  const validOptions = ["uncommitted", "custom"];
+  const validOptions = ["uncommitted", "custom", "branch", "commit"];
   if (option && !validOptions.includes(option)) {
     console.error(`Unknown review option: ${option}`);
     console.error(`Valid options: ${validOptions.join(", ")}`);
@@ -4647,6 +4647,12 @@ async function cmdReview(
     /** @type {Record<string, string>} */
     const reviewPrompts = {
       uncommitted: "Review uncommitted changes.",
+      branch: customInstructions
+        ? `Review changes on the current branch compared to ${customInstructions}.`
+        : "Review changes on the current branch compared to main.",
+      commit: customInstructions
+        ? `Review commit ${customInstructions}.`
+        : "Review the most recent commit.",
       custom: customInstructions || "Review the code.",
     };
     const prompt = (option && reviewPrompts[option]) || reviewPrompts.uncommitted;
@@ -4690,6 +4696,35 @@ async function cmdReview(
       await waitFor(activeSession, (s) => s.includes("custom") || s.includes("instructions"));
       tmuxSendLiteral(activeSession, customInstructions);
       await sleep(50);
+      tmuxSend(activeSession, "Enter");
+    } else if (option === "branch") {
+      // Wait for branch picker (preset menu must disappear first)
+      await waitFor(activeSession, (s) => !s.includes("Select a review preset"));
+      await sleep(200);
+      if (customInstructions) {
+        // Type the branch name to filter/select
+        tmuxSendLiteral(activeSession, customInstructions);
+        await sleep(100);
+      }
+      tmuxSend(activeSession, "Enter");
+    } else if (option === "commit") {
+      // Wait for commit picker (preset menu must disappear first)
+      await waitFor(activeSession, (s) => !s.includes("Select a review preset"));
+      await sleep(200);
+      if (customInstructions) {
+        // Codex commit picker shows messages, not hashes - resolve ref to message
+        let searchTerm = customInstructions;
+        const gitResult = spawnSync("git", ["log", "--format=%s", "-n", "1", customInstructions], {
+          encoding: "utf-8",
+        });
+        if (gitResult.status === 0 && gitResult.stdout.trim()) {
+          // Use first few words of commit message for search
+          searchTerm = gitResult.stdout.trim().slice(0, 40);
+          debug("review", `resolved commit ${customInstructions} -> "${searchTerm}"`);
+        }
+        tmuxSendLiteral(activeSession, searchTerm);
+        await sleep(100);
+      }
       tmuxSend(activeSession, "Enter");
     }
   }
@@ -4981,7 +5016,7 @@ Usage: ${name} [OPTIONS] <command|message> [ARGS...]
 
 Messaging:
   <message>                 Send message to ${name}
-  review [TYPE]             Review code: uncommitted, custom
+  review [TYPE] [TARGET]    Review code: uncommitted, branch [base], commit [ref], custom
 
 Sessions:
   compact                   Summarise session to shrink context size
@@ -5024,6 +5059,8 @@ Examples:
   ${name} "FYI: auth was refactored" --no-wait          # Send context to a working session (no response needed)
   ${name} --auto-approve='Bash("cargo *")' "run tests"  # Session with specific permissions
   ${name} review uncommitted --wait
+  ${name} review branch main                            # Review changes vs main branch
+  ${name} review commit HEAD~1                          # Review specific commit
   ${name} kill                                          # Kill agents in current project
   ${name} kill --all                                    # Kill all agents across all projects
   ${name} kill --session=NAME                           # Kill specific session
