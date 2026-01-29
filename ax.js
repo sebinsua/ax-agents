@@ -2312,24 +2312,31 @@ class Agent {
     let base;
     if (yolo) {
       base = this.yoloCommand;
+      debug("command", `mode=yolo`);
     } else if (customAllowedTools) {
       // Custom permissions from --auto-approve flag
       // Escape for shell: backslashes first, then double quotes
       const escaped = customAllowedTools.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
       base = `${this.startCommand} --allowedTools "${escaped}"`;
+      debug("command", `mode=custom, allowedTools=${customAllowedTools}`);
     } else if (this.safeAllowedTools) {
       // Default: auto-approve safe read-only operations
       base = `${this.startCommand} --allowedTools "${this.safeAllowedTools}"`;
+      debug("command", `mode=safe, allowedTools=${this.safeAllowedTools}`);
     } else {
       base = this.startCommand;
+      debug("command", `mode=default`);
     }
     // Some agents support session ID flags for deterministic session tracking
     if (this.sessionIdFlag && sessionName) {
       const parsed = parseSessionName(sessionName);
       if (parsed?.uuid) {
-        return `${base} ${this.sessionIdFlag} ${parsed.uuid}`;
+        const cmd = `${base} ${this.sessionIdFlag} ${parsed.uuid}`;
+        debug("command", `full: ${cmd}`);
+        return cmd;
       }
     }
+    debug("command", `full: ${base}`);
     return base;
   }
 
