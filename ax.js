@@ -252,11 +252,15 @@ function tmuxKill(session) {
  * @param {string} command
  */
 function tmuxNewSession(session, command) {
+  debug("tmux", `newSession: ${session}, command: ${command.slice(0, 80)}...`);
   // Use spawnSync to avoid command injection via session/command
   const result = spawnSync("tmux", ["new-session", "-d", "-s", session, command], {
     encoding: "utf-8",
   });
-  if (result.status !== 0) throw new Error(result.stderr || "tmux new-session failed");
+  if (result.status !== 0) {
+    debug("tmux", `newSession failed: ${result.stderr}`);
+    throw new Error(result.stderr || "tmux new-session failed");
+  }
 }
 
 /**
@@ -415,11 +419,16 @@ class TimeoutError extends Error {
  */
 async function waitFor(session, predicate, timeoutMs = STARTUP_TIMEOUT_MS) {
   const start = Date.now();
+  debug("waitFor", `waiting (timeout=${timeoutMs}ms)`);
   while (Date.now() - start < timeoutMs) {
     const screen = tmuxCapture(session);
-    if (predicate(screen)) return screen;
+    if (predicate(screen)) {
+      debug("waitFor", `matched after ${Date.now() - start}ms`);
+      return screen;
+    }
     await sleep(POLL_MS);
   }
+  debug("waitFor", `timeout after ${timeoutMs}ms`);
   throw new TimeoutError(session);
 }
 
@@ -2757,9 +2766,11 @@ async function waitUntilReady(agent, session, timeoutMs = DEFAULT_TIMEOUT_MS) {
   const start = Date.now();
   const initialScreen = tmuxCapture(session);
   const initialState = agent.getState(initialScreen);
+  debug("waitUntilReady", `start: initialState=${initialState}, timeout=${timeoutMs}ms`);
 
   // Dismiss feedback modal if present
   if (initialState === State.FEEDBACK_MODAL) {
+    debug("waitUntilReady", `dismissing feedback modal`);
     tmuxSend(session, "0");
     await sleep(200);
   } else if (
@@ -2768,6 +2779,7 @@ async function waitUntilReady(agent, session, timeoutMs = DEFAULT_TIMEOUT_MS) {
     initialState === State.CONFIRMING ||
     initialState === State.READY
   ) {
+    debug("waitUntilReady", `already in terminal state: ${initialState}`);
     return { state: initialState, screen: initialScreen };
   }
 
@@ -2778,15 +2790,18 @@ async function waitUntilReady(agent, session, timeoutMs = DEFAULT_TIMEOUT_MS) {
 
     // Dismiss feedback modal if it appears
     if (state === State.FEEDBACK_MODAL) {
+      debug("waitUntilReady", `dismissing feedback modal`);
       tmuxSend(session, "0");
       await sleep(200);
       continue;
     }
 
     if (state === State.RATE_LIMITED || state === State.CONFIRMING || state === State.READY) {
+      debug("waitUntilReady", `reached state=${state} after ${Date.now() - start}ms`);
       return { state, screen };
     }
   }
+  debug("waitUntilReady", `timeout after ${timeoutMs}ms`);
   throw new TimeoutError(session);
 }
 
@@ -2962,6 +2977,7 @@ async function streamResponse(agent, session, timeoutMs = DEFAULT_TIMEOUT_MS) {
  */
 async function autoApproveLoop(agent, session, timeoutMs, waitFn) {
   const deadline = Date.now() + timeoutMs;
+  debug("autoApprove", `starting loop, timeout=${timeoutMs}ms`);
 
   while (Date.now() < deadline) {
     const remaining = deadline - Date.now();
@@ -2970,10 +2986,12 @@ async function autoApproveLoop(agent, session, timeoutMs, waitFn) {
     const { state, screen } = await waitFn(agent, session, remaining);
 
     if (state === State.RATE_LIMITED || state === State.READY) {
+      debug("autoApprove", `finished with state=${state}`);
       return { state, screen };
     }
 
     if (state === State.CONFIRMING) {
+      debug("autoApprove", `auto-approving confirmation`);
       tmuxSend(session, agent.approveKey);
       await sleep(APPROVE_DELAY_MS);
       continue;
@@ -2983,6 +3001,7 @@ async function autoApproveLoop(agent, session, timeoutMs, waitFn) {
     debugError("autoApproveLoop", new Error(`unexpected state: ${state}`));
   }
 
+  debug("autoApprove", `timeout`);
   throw new TimeoutError(session);
 }
 
@@ -4682,33 +4701,37 @@ async function cmdReview(
     ? /** @type {string} */ (session)
     : await cmdStart(agent, session, { yolo });
 
+  debug("review", `Codex path: sending /review command`);
   tmuxSendLiteral(activeSession, "/review");
   await sleep(50);
   tmuxSend(activeSession, "Enter");
 
+  debug("review", `waiting for review menu`);
   await waitFor(activeSession, (s) => s.includes("Select a review preset") || s.includes("review"));
 
   if (option) {
     const key = agent.reviewOptions[option] || option;
+    debug("review", `selecting option=${option} (key=${key})`);
     tmuxSend(activeSession, key);
 
     if (option === "custom" && customInstructions) {
+      debug("review", `waiting for custom instructions prompt`);
       await waitFor(activeSession, (s) => s.includes("custom") || s.includes("instructions"));
       tmuxSendLiteral(activeSession, customInstructions);
       await sleep(50);
       tmuxSend(activeSession, "Enter");
     } else if (option === "branch") {
-      // Wait for branch picker (preset menu must disappear first)
+      debug("review", `waiting for branch picker`);
       await waitFor(activeSession, (s) => !s.includes("Select a review preset"));
       await sleep(200);
       if (customInstructions) {
-        // Type the branch name to filter/select
+        debug("review", `typing branch filter: ${customInstructions}`);
         tmuxSendLiteral(activeSession, customInstructions);
         await sleep(100);
       }
       tmuxSend(activeSession, "Enter");
     } else if (option === "commit") {
-      // Wait for commit picker (preset menu must disappear first)
+      debug("review", `waiting for commit picker`);
       await waitFor(activeSession, (s) => !s.includes("Select a review preset"));
       await sleep(200);
       if (customInstructions) {
@@ -4722,6 +4745,7 @@ async function cmdReview(
           searchTerm = gitResult.stdout.trim().slice(0, 40);
           debug("review", `resolved commit ${customInstructions} -> "${searchTerm}"`);
         }
+        debug("review", `typing commit filter: ${searchTerm}`);
         tmuxSendLiteral(activeSession, searchTerm);
         await sleep(100);
       }
