@@ -131,7 +131,7 @@ const VERSION = packageJson.version;
 /**
  * @typedef {{matcher: string, hooks: Array<{type: string, command: string, timeout?: number}>}} ClaudeHookEntry
  * @typedef {Object} ClaudeSettings
- * @property {{UserPromptSubmit?: ClaudeHookEntry[], PostToolUse?: ClaudeHookEntry[], Stop?: ClaudeHookEntry[], [key: string]: ClaudeHookEntry[] | undefined}} [hooks]
+ * @property {{UserPromptSubmit?: ClaudeHookEntry[], PreToolUse?: ClaudeHookEntry[], Stop?: ClaudeHookEntry[], [key: string]: ClaudeHookEntry[] | undefined}} [hooks]
  */
 
 const DEBUG = process.env.AX_DEBUG === "1";
@@ -3420,7 +3420,7 @@ async function cmdRecall(name = null) {
 }
 
 // Version of the hook script template - bump when making changes
-const HOOK_SCRIPT_VERSION = "4";
+const HOOK_SCRIPT_VERSION = "5";
 
 function ensureMailboxHookScript() {
   const hooksDir = HOOKS_DIR;
@@ -3539,8 +3539,16 @@ if (relevant.length > 0) {
   // For Stop hook, return blocking JSON to force acknowledgment
   if (hookEvent === "Stop") {
     console.log(JSON.stringify({ decision: "block", reason: formattedMessage }));
+  } else if (hookEvent === "PreToolUse") {
+    // For PreToolUse, use JSON with hookSpecificOutput to inject into Claude's context
+    console.log(JSON.stringify({
+      hookSpecificOutput: {
+        hookEventName: "PreToolUse",
+        additionalContext: formattedMessage
+      }
+    }));
   } else {
-    // For other hooks, just output the context
+    // For UserPromptSubmit, plain text stdout is automatically added to context
     console.log(formattedMessage);
   }
 
@@ -3566,7 +3574,7 @@ process.exit(0);
     console.log(`{
   "hooks": {
     "UserPromptSubmit": [{ "matcher": "", "hooks": [{ "type": "command", "command": "node .ai/hooks/mailbox-inject.js", "timeout": 5 }] }],
-    "PostToolUse": [{ "matcher": "", "hooks": [{ "type": "command", "command": "node .ai/hooks/mailbox-inject.js", "timeout": 5 }] }],
+    "PreToolUse": [{ "matcher": "", "hooks": [{ "type": "command", "command": "node .ai/hooks/mailbox-inject.js", "timeout": 5 }] }],
     "Stop": [{ "matcher": "", "hooks": [{ "type": "command", "command": "node .ai/hooks/mailbox-inject.js", "timeout": 5 }] }]
   }
 }`);
@@ -3577,7 +3585,7 @@ function ensureClaudeHookConfig() {
   const settingsDir = ".claude";
   const settingsPath = path.join(settingsDir, "settings.json");
   const hookCommand = "node .ai/hooks/mailbox-inject.js";
-  const hookEvents = ["UserPromptSubmit", "PostToolUse", "Stop"];
+  const hookEvents = ["UserPromptSubmit", "PreToolUse", "Stop"];
 
   try {
     /** @type {ClaudeSettings} */
