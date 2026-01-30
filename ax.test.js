@@ -19,6 +19,15 @@ import {
   computePermissionHash,
   formatClaudeLogEntry,
   formatCodexLogEntry,
+  parseJsonlEntry,
+  parseScreenLines,
+  parseAnsiLine,
+  parseStyledScreenLines,
+  findMatch,
+  JsonlTerminalStream,
+  ScreenTerminalStream,
+  StyledScreenTerminalStream,
+  FakeTerminalStream,
   CodexAgent,
   ClaudeAgent,
 } from "./ax.js";
@@ -914,7 +923,7 @@ describe("formatClaudeLogEntry", () => {
     assert.strictEqual(formatClaudeLogEntry(entry), null);
   });
 
-  it("skips thinking blocks", () => {
+  it("includes thinking blocks (extended thinking models put responses here)", () => {
     const entry = {
       type: "assistant",
       message: {
@@ -924,7 +933,7 @@ describe("formatClaudeLogEntry", () => {
         ],
       },
     };
-    assert.strictEqual(formatClaudeLogEntry(entry), "Here's my answer");
+    assert.strictEqual(formatClaudeLogEntry(entry), "Let me think...\nHere's my answer");
   });
 });
 
@@ -1131,5 +1140,545 @@ describe("detectState with activeWorkPatterns", () => {
 
 › `;
     assert.strictEqual(detectState(screen, configNoActiveWork), State.READY);
+  });
+});
+
+// =============================================================================
+// Terminal Stream Primitives - parseJsonlEntry, parseScreenLines, findMatch
+// =============================================================================
+
+describe("parseJsonlEntry", () => {
+  describe("claude format", () => {
+    it("parses assistant text entry into TerminalLine[]", () => {
+      const entry = {
+        type: "assistant",
+        message: { content: [{ type: "text", text: "Hello world" }] },
+      };
+      const lines = parseJsonlEntry(entry, "claude");
+      assert.strictEqual(lines.length, 1);
+      assert.strictEqual(lines[0].raw, "Hello world");
+      assert.deepStrictEqual(lines[0].spans, [{ text: "Hello world" }]);
+    });
+
+    it("splits multiline text into multiple TerminalLine[]", () => {
+      const entry = {
+        type: "assistant",
+        message: { content: [{ type: "text", text: "Line 1\nLine 2\nLine 3" }] },
+      };
+      const lines = parseJsonlEntry(entry, "claude");
+      assert.strictEqual(lines.length, 3);
+      assert.strictEqual(lines[0].raw, "Line 1");
+      assert.strictEqual(lines[1].raw, "Line 2");
+      assert.strictEqual(lines[2].raw, "Line 3");
+    });
+
+    it("returns empty array for tool_result entries", () => {
+      const entry = { type: "tool_result", content: "some result" };
+      const lines = parseJsonlEntry(entry, "claude");
+      assert.deepStrictEqual(lines, []);
+    });
+
+    it("formats tool_use entry", () => {
+      const entry = {
+        type: "assistant",
+        message: {
+          content: [{ type: "tool_use", name: "Read", input: { file_path: "/path/to/file.js" } }],
+        },
+      };
+      const lines = parseJsonlEntry(entry, "claude");
+      assert.strictEqual(lines.length, 1);
+      assert.strictEqual(lines[0].raw, "> Read(file.js)");
+    });
+  });
+
+  describe("codex format", () => {
+    it("parses assistant message into TerminalLine[]", () => {
+      const entry = {
+        type: "response_item",
+        payload: {
+          type: "message",
+          role: "assistant",
+          content: [{ type: "output_text", text: "Hello from Codex" }],
+        },
+      };
+      const lines = parseJsonlEntry(entry, "codex");
+      assert.strictEqual(lines.length, 1);
+      assert.strictEqual(lines[0].raw, "Hello from Codex");
+    });
+
+    it("returns empty array for function_call_output entries", () => {
+      const entry = {
+        type: "response_item",
+        payload: { type: "function_call_output", output: "result" },
+      };
+      const lines = parseJsonlEntry(entry, "codex");
+      assert.deepStrictEqual(lines, []);
+    });
+  });
+});
+
+describe("parseScreenLines", () => {
+  it("parses screen into TerminalLine[]", () => {
+    const screen = "Line 1\nLine 2\nLine 3";
+    const lines = parseScreenLines(screen);
+    assert.strictEqual(lines.length, 3);
+    assert.strictEqual(lines[0].raw, "Line 1");
+    assert.strictEqual(lines[1].raw, "Line 2");
+    assert.strictEqual(lines[2].raw, "Line 3");
+  });
+
+  it("creates unstyled spans for each line", () => {
+    const screen = "Hello world";
+    const lines = parseScreenLines(screen);
+    assert.strictEqual(lines.length, 1);
+    assert.deepStrictEqual(lines[0].spans, [{ text: "Hello world" }]);
+  });
+
+  it("returns empty array for empty screen", () => {
+    assert.deepStrictEqual(parseScreenLines(""), []);
+    assert.deepStrictEqual(parseScreenLines(null), []);
+    assert.deepStrictEqual(parseScreenLines(undefined), []);
+  });
+
+  it("preserves empty lines", () => {
+    const screen = "Line 1\n\nLine 3";
+    const lines = parseScreenLines(screen);
+    assert.strictEqual(lines.length, 3);
+    assert.strictEqual(lines[1].raw, "");
+  });
+});
+
+describe("findMatch", () => {
+  const sampleLines = [
+    { spans: [{ text: "Hello world" }], raw: "Hello world" },
+    { spans: [{ text: "Error: something failed" }], raw: "Error: something failed" },
+    { spans: [{ text: "Ready prompt ❯" }], raw: "Ready prompt ❯" },
+  ];
+
+  describe("string pattern matching", () => {
+    it("finds exact string match", () => {
+      const result = findMatch(sampleLines, { pattern: "Error" });
+      assert.strictEqual(result.matched, true);
+      assert.strictEqual(result.lineIndex, 1);
+      assert.strictEqual(result.line.raw, "Error: something failed");
+    });
+
+    it("returns first match when multiple lines match", () => {
+      const lines = [
+        { spans: [{ text: "test 1" }], raw: "test 1" },
+        { spans: [{ text: "test 2" }], raw: "test 2" },
+      ];
+      const result = findMatch(lines, { pattern: "test" });
+      assert.strictEqual(result.matched, true);
+      assert.strictEqual(result.lineIndex, 0);
+    });
+
+    it("returns no match when pattern not found", () => {
+      const result = findMatch(sampleLines, { pattern: "nonexistent" });
+      assert.strictEqual(result.matched, false);
+      assert.strictEqual(result.line, undefined);
+      assert.strictEqual(result.lineIndex, undefined);
+    });
+  });
+
+  describe("regex pattern matching", () => {
+    it("matches regex pattern", () => {
+      const result = findMatch(sampleLines, { pattern: /Error:\s+\w+/ });
+      assert.strictEqual(result.matched, true);
+      assert.strictEqual(result.lineIndex, 1);
+    });
+
+    it("matches regex with special characters", () => {
+      const result = findMatch(sampleLines, { pattern: /❯$/ });
+      assert.strictEqual(result.matched, true);
+      assert.strictEqual(result.lineIndex, 2);
+    });
+
+    it("returns no match for non-matching regex", () => {
+      const result = findMatch(sampleLines, { pattern: /^\d+$/ });
+      assert.strictEqual(result.matched, false);
+    });
+  });
+
+  describe("style filtering", () => {
+    it("ignores style filter when lines have no style info", () => {
+      // Lines without style info should match based on pattern only
+      const result = findMatch(sampleLines, {
+        pattern: "Error",
+        style: { fg: "red" },
+      });
+      assert.strictEqual(result.matched, true);
+      assert.strictEqual(result.lineIndex, 1);
+    });
+
+    it("matches style when lines have style info", () => {
+      const styledLines = [
+        { spans: [{ text: "Normal text" }], raw: "Normal text" },
+        { spans: [{ text: "Error", style: { fg: "red" } }], raw: "Error" },
+      ];
+      const result = findMatch(styledLines, {
+        pattern: "Error",
+        style: { fg: "red" },
+      });
+      assert.strictEqual(result.matched, true);
+      assert.strictEqual(result.lineIndex, 1);
+    });
+
+    it("does not match when style differs", () => {
+      const styledLines = [
+        { spans: [{ text: "Error", style: { fg: "green" } }], raw: "Error" },
+      ];
+      const result = findMatch(styledLines, {
+        pattern: "Error",
+        style: { fg: "red" },
+      });
+      // Style filter applies only when both have style info
+      // The span has style but it doesn't match, so no match
+      assert.strictEqual(result.matched, false);
+    });
+
+    it("matches partial style requirements", () => {
+      const styledLines = [
+        {
+          spans: [{ text: "Bold red error", style: { fg: "red", bold: true } }],
+          raw: "Bold red error",
+        },
+      ];
+      // Only require fg: red, don't care about bold
+      const result = findMatch(styledLines, {
+        pattern: "error",
+        style: { fg: "red" },
+      });
+      assert.strictEqual(result.matched, true);
+    });
+  });
+
+  describe("edge cases", () => {
+    it("handles empty lines array", () => {
+      const result = findMatch([], { pattern: "anything" });
+      assert.strictEqual(result.matched, false);
+    });
+
+    it("handles empty pattern", () => {
+      const result = findMatch(sampleLines, { pattern: "" });
+      assert.strictEqual(result.matched, true);
+      assert.strictEqual(result.lineIndex, 0);
+    });
+  });
+});
+
+// =============================================================================
+// Terminal Stream Implementations
+// =============================================================================
+
+describe("FakeTerminalStream", () => {
+  describe("static helpers", () => {
+    it("creates a single TerminalLine from string", () => {
+      const line = FakeTerminalStream.line("Hello world");
+      assert.strictEqual(line.raw, "Hello world");
+      assert.deepStrictEqual(line.spans, [{ text: "Hello world" }]);
+    });
+
+    it("creates multiple TerminalLines from strings", () => {
+      const lines = FakeTerminalStream.lines(["Line 1", "Line 2"]);
+      assert.strictEqual(lines.length, 2);
+      assert.strictEqual(lines[0].raw, "Line 1");
+      assert.strictEqual(lines[1].raw, "Line 2");
+    });
+  });
+
+  describe("readNext", () => {
+    it("returns initial lines on first call", async () => {
+      const stream = new FakeTerminalStream(FakeTerminalStream.lines(["Hello", "World"]));
+      const lines = await stream.readNext();
+      assert.strictEqual(lines.length, 2);
+      assert.strictEqual(lines[0].raw, "Hello");
+    });
+
+    it("returns empty array on subsequent calls without queued lines", async () => {
+      const stream = new FakeTerminalStream(FakeTerminalStream.lines(["Hello"]));
+      await stream.readNext(); // first call
+      const lines = await stream.readNext(); // second call
+      assert.strictEqual(lines.length, 0);
+    });
+
+    it("returns queued lines on subsequent calls", async () => {
+      const stream = new FakeTerminalStream(FakeTerminalStream.lines(["Initial"]));
+      stream.queueLines(FakeTerminalStream.lines(["Queued 1"]));
+      stream.queueLines(FakeTerminalStream.lines(["Queued 2"]));
+
+      await stream.readNext(); // returns initial
+      const second = await stream.readNext(); // returns Queued 1
+      const third = await stream.readNext(); // returns Queued 2
+
+      assert.strictEqual(second[0].raw, "Queued 1");
+      assert.strictEqual(third[0].raw, "Queued 2");
+    });
+
+    it("respects max option", async () => {
+      const stream = new FakeTerminalStream(
+        FakeTerminalStream.lines(["Line 1", "Line 2", "Line 3"]),
+      );
+      const lines = await stream.readNext({ max: 2 });
+      assert.strictEqual(lines.length, 2);
+    });
+  });
+
+  describe("waitForMatch", () => {
+    it("finds match in initial lines", async () => {
+      const stream = new FakeTerminalStream(FakeTerminalStream.lines(["No match", "Error: found"]));
+      const result = await stream.waitForMatch({ pattern: "Error" });
+      assert.strictEqual(result.matched, true);
+      assert.strictEqual(result.lineIndex, 1);
+    });
+
+    it("finds match in pending lines", async () => {
+      const stream = new FakeTerminalStream(FakeTerminalStream.lines(["Initial"]));
+      stream.queueLines(FakeTerminalStream.lines(["Found it!"]));
+
+      const result = await stream.waitForMatch({ pattern: "Found" });
+      assert.strictEqual(result.matched, true);
+    });
+
+    it("returns no match when pattern not found", async () => {
+      const stream = new FakeTerminalStream(FakeTerminalStream.lines(["Hello", "World"]));
+      const result = await stream.waitForMatch({ pattern: "Missing" });
+      assert.strictEqual(result.matched, false);
+    });
+
+    it("matches with regex pattern", async () => {
+      const stream = new FakeTerminalStream(FakeTerminalStream.lines(["Error: 404 not found"]));
+      const result = await stream.waitForMatch({ pattern: /Error:\s+\d+/ });
+      assert.strictEqual(result.matched, true);
+    });
+  });
+
+  describe("addLines", () => {
+    it("adds lines to buffer", async () => {
+      const stream = new FakeTerminalStream(FakeTerminalStream.lines(["Initial"]));
+      stream.addLines(FakeTerminalStream.lines(["Added"]));
+
+      // Initial lines include Added now
+      const lines = await stream.readNext();
+      assert.strictEqual(lines.length, 2);
+      assert.strictEqual(lines[1].raw, "Added");
+    });
+  });
+});
+
+describe("JsonlTerminalStream", () => {
+  it("constructs with log path finder and format", () => {
+    const stream = new JsonlTerminalStream(() => null, "claude");
+    assert.strictEqual(stream.format, "claude");
+    assert.strictEqual(stream.offset, 0);
+  });
+
+  it("returns empty array when no log path", async () => {
+    const stream = new JsonlTerminalStream(() => null, "claude");
+    const lines = await stream.readNext();
+    assert.deepStrictEqual(lines, []);
+  });
+});
+
+describe("ScreenTerminalStream", () => {
+  it("constructs with session name", () => {
+    const stream = new ScreenTerminalStream("test-session", 100);
+    assert.strictEqual(stream.session, "test-session");
+    assert.strictEqual(stream.scrollback, 100);
+  });
+
+  it("tracks last screen", () => {
+    const stream = new ScreenTerminalStream("test-session");
+    assert.strictEqual(stream.getLastScreen(), "");
+  });
+});
+
+describe("StyledScreenTerminalStream", () => {
+  it("constructs with session name", () => {
+    const stream = new StyledScreenTerminalStream("test-session", 100);
+    assert.strictEqual(stream.session, "test-session");
+    assert.strictEqual(stream.scrollback, 100);
+  });
+
+  it("tracks last screen", () => {
+    const stream = new StyledScreenTerminalStream("test-session");
+    assert.strictEqual(stream.getLastScreen(), "");
+  });
+});
+
+describe("Agent.createStream", () => {
+  it("ClaudeAgent creates JsonlTerminalStream", () => {
+    const stream = ClaudeAgent.createStream("claude-partner-12345678-1234-1234-1234-123456789abc");
+    assert.ok(stream instanceof JsonlTerminalStream);
+    assert.strictEqual(stream.format, "claude");
+  });
+
+  it("CodexAgent creates JsonlTerminalStream", () => {
+    const stream = CodexAgent.createStream("codex-partner-12345678-1234-1234-1234-123456789abc");
+    assert.ok(stream instanceof JsonlTerminalStream);
+    assert.strictEqual(stream.format, "codex");
+  });
+
+  it("createStyledStream returns StyledScreenTerminalStream", () => {
+    const stream = ClaudeAgent.createStyledStream("claude-partner-123", 50);
+    assert.ok(stream instanceof StyledScreenTerminalStream);
+    assert.strictEqual(stream.session, "claude-partner-123");
+    assert.strictEqual(stream.scrollback, 50);
+  });
+});
+
+// =============================================================================
+// ANSI Parsing - parseAnsiLine, parseStyledScreenLines
+// =============================================================================
+
+describe("parseAnsiLine", () => {
+  describe("plain text (no escapes)", () => {
+    it("returns single unstyled span for plain text", () => {
+      const spans = parseAnsiLine("Hello world");
+      assert.strictEqual(spans.length, 1);
+      assert.strictEqual(spans[0].text, "Hello world");
+      assert.strictEqual(spans[0].style, undefined);
+    });
+
+    it("handles empty string", () => {
+      const spans = parseAnsiLine("");
+      assert.strictEqual(spans.length, 1);
+      assert.strictEqual(spans[0].text, "");
+    });
+
+    it("handles null/undefined", () => {
+      assert.strictEqual(parseAnsiLine(null)[0].text, "");
+      assert.strictEqual(parseAnsiLine(undefined)[0].text, "");
+    });
+  });
+
+  describe("foreground colors", () => {
+    it("parses red text", () => {
+      const spans = parseAnsiLine("\x1b[31mError\x1b[0m");
+      assert.strictEqual(spans.length, 1);
+      assert.strictEqual(spans[0].text, "Error");
+      assert.strictEqual(spans[0].style.fg, "red");
+    });
+
+    it("parses green text", () => {
+      const spans = parseAnsiLine("\x1b[32mSuccess\x1b[0m");
+      assert.strictEqual(spans[0].text, "Success");
+      assert.strictEqual(spans[0].style.fg, "green");
+    });
+
+    it("parses bright colors", () => {
+      const spans = parseAnsiLine("\x1b[91mBright Red\x1b[0m");
+      assert.strictEqual(spans[0].text, "Bright Red");
+      assert.strictEqual(spans[0].style.fg, "bright-red");
+    });
+  });
+
+  describe("background colors", () => {
+    it("parses background color", () => {
+      const spans = parseAnsiLine("\x1b[44mBlue BG\x1b[0m");
+      assert.strictEqual(spans[0].text, "Blue BG");
+      assert.strictEqual(spans[0].style.bg, "blue");
+    });
+  });
+
+  describe("text attributes", () => {
+    it("parses bold text", () => {
+      const spans = parseAnsiLine("\x1b[1mBold\x1b[0m");
+      assert.strictEqual(spans[0].text, "Bold");
+      assert.strictEqual(spans[0].style.bold, true);
+    });
+
+    it("parses dim text", () => {
+      const spans = parseAnsiLine("\x1b[2mDim\x1b[0m");
+      assert.strictEqual(spans[0].text, "Dim");
+      assert.strictEqual(spans[0].style.dim, true);
+    });
+
+    it("parses italic text", () => {
+      const spans = parseAnsiLine("\x1b[3mItalic\x1b[0m");
+      assert.strictEqual(spans[0].text, "Italic");
+      assert.strictEqual(spans[0].style.italic, true);
+    });
+
+    it("parses underlined text", () => {
+      const spans = parseAnsiLine("\x1b[4mUnderline\x1b[0m");
+      assert.strictEqual(spans[0].text, "Underline");
+      assert.strictEqual(spans[0].style.underline, true);
+    });
+  });
+
+  describe("combined styles", () => {
+    it("parses bold red text", () => {
+      const spans = parseAnsiLine("\x1b[1;31mBold Red\x1b[0m");
+      assert.strictEqual(spans[0].text, "Bold Red");
+      assert.strictEqual(spans[0].style.bold, true);
+      assert.strictEqual(spans[0].style.fg, "red");
+    });
+
+    it("parses multiple spans with different colors", () => {
+      const spans = parseAnsiLine("Normal \x1b[31mRed\x1b[0m \x1b[32mGreen\x1b[0m");
+      assert.strictEqual(spans.length, 4);
+      assert.strictEqual(spans[0].text, "Normal ");
+      assert.strictEqual(spans[0].style, undefined);
+      assert.strictEqual(spans[1].text, "Red");
+      assert.strictEqual(spans[1].style.fg, "red");
+      assert.strictEqual(spans[2].text, " ");
+      assert.strictEqual(spans[3].text, "Green");
+      assert.strictEqual(spans[3].style.fg, "green");
+    });
+  });
+
+  describe("reset and default codes", () => {
+    it("resets style with code 0", () => {
+      const spans = parseAnsiLine("\x1b[31mRed\x1b[0mNormal");
+      assert.strictEqual(spans[1].text, "Normal");
+      assert.strictEqual(spans[1].style, undefined);
+    });
+
+    it("resets style with empty params (\\x1b[m)", () => {
+      // Common shorthand: \x1b[m is equivalent to \x1b[0m
+      const spans = parseAnsiLine("\x1b[31mRed\x1b[mNormal");
+      assert.strictEqual(spans[0].text, "Red");
+      assert.strictEqual(spans[0].style.fg, "red");
+      assert.strictEqual(spans[1].text, "Normal");
+      assert.strictEqual(spans[1].style, undefined);
+    });
+
+    it("resets foreground with code 39", () => {
+      const spans = parseAnsiLine("\x1b[31mRed\x1b[39mDefault");
+      assert.strictEqual(spans[0].style.fg, "red");
+      assert.strictEqual(spans[1].style?.fg, undefined);
+    });
+
+    it("resets bold/dim with code 22", () => {
+      const spans = parseAnsiLine("\x1b[1mBold\x1b[22mNormal");
+      assert.strictEqual(spans[0].style.bold, true);
+      // After 22, bold should be removed
+      const span1Style = spans[1].style || {};
+      assert.strictEqual(span1Style.bold, undefined);
+    });
+  });
+});
+
+describe("parseStyledScreenLines", () => {
+  it("parses multiple lines with colors", () => {
+    const screen = "\x1b[32mLine 1\x1b[0m\n\x1b[31mLine 2\x1b[0m";
+    const lines = parseStyledScreenLines(screen);
+    assert.strictEqual(lines.length, 2);
+    assert.strictEqual(lines[0].raw, "Line 1");
+    assert.strictEqual(lines[0].spans[0].style.fg, "green");
+    assert.strictEqual(lines[1].raw, "Line 2");
+    assert.strictEqual(lines[1].spans[0].style.fg, "red");
+  });
+
+  it("joins spans to create raw text", () => {
+    const screen = "Normal \x1b[31mRed\x1b[0m Text";
+    const lines = parseStyledScreenLines(screen);
+    assert.strictEqual(lines[0].raw, "Normal Red Text");
+  });
+
+  it("returns empty array for empty input", () => {
+    assert.deepStrictEqual(parseStyledScreenLines(""), []);
+    assert.deepStrictEqual(parseStyledScreenLines(null), []);
   });
 });

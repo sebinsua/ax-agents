@@ -134,6 +134,71 @@ const VERSION = packageJson.version;
  * @property {{UserPromptSubmit?: ClaudeHookEntry[], PreToolUse?: ClaudeHookEntry[], Stop?: ClaudeHookEntry[], [key: string]: ClaudeHookEntry[] | undefined}} [hooks]
  */
 
+// =============================================================================
+// Terminal Stream Types - Abstraction layer for terminal I/O
+// =============================================================================
+
+/**
+ * Style properties for terminal text (ANSI colors, formatting)
+ * @typedef {Object} TerminalStyle
+ * @property {string} [fg] - Foreground color (e.g., "red", "green", "#ff0000")
+ * @property {string} [bg] - Background color
+ * @property {boolean} [bold] - Bold text
+ * @property {boolean} [dim] - Dimmed text
+ * @property {boolean} [italic] - Italic text
+ * @property {boolean} [underline] - Underlined text
+ */
+
+/**
+ * A span of text with optional styling
+ * @typedef {Object} TextSpan
+ * @property {string} text - The text content
+ * @property {TerminalStyle} [style] - Optional style properties
+ */
+
+/**
+ * A line of terminal output, containing styled spans and raw text
+ * @typedef {Object} TerminalLine
+ * @property {TextSpan[]} spans - Styled text spans
+ * @property {string} raw - Raw text content (spans joined, styles stripped)
+ */
+
+/**
+ * Query for matching terminal lines
+ * @typedef {Object} MatchQuery
+ * @property {string | RegExp} pattern - Pattern to match against raw line text
+ * @property {Partial<TerminalStyle>} [style] - Optional style filter (ignored if implementation doesn't support styles)
+ */
+
+/**
+ * Result of a pattern match operation
+ * @typedef {Object} MatchResult
+ * @property {boolean} matched - Whether a match was found
+ * @property {TerminalLine} [line] - The matched line (if matched)
+ * @property {number} [lineIndex] - Index of the matched line (if matched)
+ */
+
+/**
+ * Options for reading from a terminal stream
+ * @typedef {Object} ReadOptions
+ * @property {number} [max] - Maximum number of lines to return
+ * @property {number} [timeoutMs] - Timeout in milliseconds
+ */
+
+/**
+ * Options for waiting for a match
+ * @typedef {Object} WaitOptions
+ * @property {number} [timeoutMs] - Timeout in milliseconds
+ */
+
+/**
+ * Interface for reading terminal output.
+ * Implementations: JsonlTerminalStream (Claude logs), ScreenTerminalStream (tmux capture)
+ * @typedef {Object} TerminalStream
+ * @property {(opts?: ReadOptions) => Promise<TerminalLine[]>} readNext - Read new lines since last read
+ * @property {(query: MatchQuery, opts?: WaitOptions) => Promise<MatchResult>} waitForMatch - Wait for a line matching the query
+ */
+
 const DEBUG = process.env.AX_DEBUG === "1";
 
 /**
@@ -205,11 +270,13 @@ function tmuxHasSession(session) {
 /**
  * @param {string} session
  * @param {number} [scrollback]
+ * @param {boolean} [withEscapes] - Include ANSI escape sequences (uses -e flag)
  * @returns {string}
  */
-function tmuxCapture(session, scrollback = 0) {
+function tmuxCapture(session, scrollback = 0, withEscapes = false) {
   try {
     const args = ["capture-pane", "-t", session, "-p"];
+    if (withEscapes) args.push("-e"); // Include escape sequences
     if (scrollback) args.push("-S", String(-scrollback));
     return tmux(args);
   } catch (err) {
@@ -837,7 +904,10 @@ function findCodexLogPath(sessionName) {
     }
     // Return the closest match
     candidates.sort((a, b) => a.diff - b.diff);
-    debug("log", `findCodexLogPath: found ${candidates.length} candidates, best: ${candidates[0].path}`);
+    debug(
+      "log",
+      `findCodexLogPath: found ${candidates.length} candidates, best: ${candidates[0].path}`,
+    );
     return candidates[0].path;
   } catch {
     debug("log", `findCodexLogPath: exception caught`);
@@ -1026,7 +1096,7 @@ function tailJsonl(logPath, fromOffset) {
 /**
  * Format a Claude Code JSONL log entry for streaming display.
  * Claude format: {type: "assistant", message: {content: [...]}}
- * @param {{type?: string, message?: {content?: Array<{type?: string, text?: string, name?: string, input?: ToolInput, tool?: string, arguments?: ToolInput}>}}} entry
+ * @param {{type?: string, message?: {content?: Array<{type?: string, text?: string, thinking?: string, name?: string, input?: ToolInput, tool?: string, arguments?: ToolInput}>}}} entry
  * @returns {string | null}
  */
 function formatClaudeLogEntry(entry) {
@@ -1068,7 +1138,8 @@ function formatClaudeLogEntry(entry) {
  * - {type: "response_item", payload: {type: "message", role: "assistant", content: [{type: "output_text", text: "..."}]}}
  * - {type: "response_item", payload: {type: "function_call", name: "...", arguments: "{...}"}}
  * - {type: "event_msg", payload: {type: "agent_message", message: "..."}}
- * @param {{type?: string, payload?: {type?: string, role?: string, name?: string, arguments?: string, message?: string, content?: Array<{type?: string, text?: string}>}}} entry
+ * - {type: "event_msg", payload: {type: "agent_reasoning", text: "..."}}
+ * @param {{type?: string, payload?: {type?: string, role?: string, name?: string, arguments?: string, message?: string, text?: string, content?: Array<{type?: string, text?: string}>}}} entry
  * @returns {string | null}
  */
 function formatCodexLogEntry(entry) {
@@ -1118,6 +1189,587 @@ function formatCodexLogEntry(entry) {
   }
 
   return null;
+}
+
+// =============================================================================
+// Terminal Stream Primitives - Pure functions for parsing terminal data
+// =============================================================================
+
+/**
+ * Parse a JSONL log entry into TerminalLine[].
+ * Wraps formatClaudeLogEntry/formatCodexLogEntry to return structured data.
+ * @param {object} entry - A parsed JSONL entry
+ * @param {'claude' | 'codex'} format - The log format
+ * @returns {TerminalLine[]}
+ */
+function parseJsonlEntry(entry, format) {
+  const formatted = format === "claude" ? formatClaudeLogEntry(entry) : formatCodexLogEntry(entry);
+  if (!formatted) return [];
+
+  // Split on newlines and create a TerminalLine for each
+  return formatted.split("\n").map((line) => ({
+    spans: [{ text: line }],
+    raw: line,
+  }));
+}
+
+/**
+ * Parse raw screen output into TerminalLine[].
+ * Each line becomes a TerminalLine with a single unstyled span.
+ * @param {string} screen - Raw screen content from tmux capture
+ * @returns {TerminalLine[]}
+ */
+function parseScreenLines(screen) {
+  if (!screen) return [];
+  return screen.split("\n").map((line) => ({
+    spans: [{ text: line }],
+    raw: line,
+  }));
+}
+
+/**
+ * ANSI color code to color name mapping.
+ * @type {Record<string, string>}
+ */
+const ANSI_COLORS = {
+  30: "black",
+  31: "red",
+  32: "green",
+  33: "yellow",
+  34: "blue",
+  35: "magenta",
+  36: "cyan",
+  37: "white",
+  90: "bright-black",
+  91: "bright-red",
+  92: "bright-green",
+  93: "bright-yellow",
+  94: "bright-blue",
+  95: "bright-magenta",
+  96: "bright-cyan",
+  97: "bright-white",
+};
+
+/**
+ * ANSI background color code to color name mapping.
+ * @type {Record<string, string>}
+ */
+const ANSI_BG_COLORS = {
+  40: "black",
+  41: "red",
+  42: "green",
+  43: "yellow",
+  44: "blue",
+  45: "magenta",
+  46: "cyan",
+  47: "white",
+  100: "bright-black",
+  101: "bright-red",
+  102: "bright-green",
+  103: "bright-yellow",
+  104: "bright-blue",
+  105: "bright-magenta",
+  106: "bright-cyan",
+  107: "bright-white",
+};
+
+/**
+ * Parse ANSI escape sequences from a line of text into styled spans.
+ * @param {string} line - Line containing ANSI escape sequences
+ * @returns {TextSpan[]}
+ */
+function parseAnsiLine(line) {
+  if (!line) return [{ text: "" }];
+
+  const spans = [];
+  /** @type {TerminalStyle} */
+  let currentStyle = {};
+  let currentText = "";
+
+  // ANSI escape sequence pattern: ESC [ <params> m
+  // Matches sequences like \x1b[31m (red), \x1b[1;31m (bold red), \x1b[0m (reset)
+  // eslint-disable-next-line no-control-regex
+  const ansiPattern = /\x1b\[([0-9;]*)m/g;
+  let lastIndex = 0;
+  let match;
+
+  while ((match = ansiPattern.exec(line)) !== null) {
+    // Add text before this escape sequence
+    const textBefore = line.slice(lastIndex, match.index);
+    if (textBefore) {
+      currentText += textBefore;
+    }
+
+    // Flush current span if we have text
+    if (currentText) {
+      /** @type {TextSpan} */
+      const span = { text: currentText };
+      if (Object.keys(currentStyle).length > 0) {
+        span.style = { ...currentStyle };
+      }
+      spans.push(span);
+      currentText = "";
+    }
+
+    // Parse SGR (Select Graphic Rendition) parameters
+    // Note: \x1b[m (empty params) is equivalent to \x1b[0m (reset)
+    const params = match[1].split(";").filter(Boolean);
+    if (params.length === 0) {
+      // Empty params means reset (e.g., \x1b[m)
+      currentStyle = {};
+    }
+    for (const param of params) {
+      const code = param;
+      if (code === "0") {
+        // Reset
+        currentStyle = {};
+      } else if (code === "1") {
+        currentStyle.bold = true;
+      } else if (code === "2") {
+        currentStyle.dim = true;
+      } else if (code === "3") {
+        currentStyle.italic = true;
+      } else if (code === "4") {
+        currentStyle.underline = true;
+      } else if (code === "22") {
+        // Normal intensity (neither bold nor dim)
+        delete currentStyle.bold;
+        delete currentStyle.dim;
+      } else if (code === "23") {
+        delete currentStyle.italic;
+      } else if (code === "24") {
+        delete currentStyle.underline;
+      } else if (ANSI_COLORS[code]) {
+        currentStyle.fg = ANSI_COLORS[code];
+      } else if (ANSI_BG_COLORS[code]) {
+        currentStyle.bg = ANSI_BG_COLORS[code];
+      } else if (code === "39") {
+        // Default foreground
+        delete currentStyle.fg;
+      } else if (code === "49") {
+        // Default background
+        delete currentStyle.bg;
+      }
+    }
+
+    lastIndex = ansiPattern.lastIndex;
+  }
+
+  // Add remaining text
+  const remaining = line.slice(lastIndex);
+  if (remaining) {
+    currentText += remaining;
+  }
+
+  // Flush final span
+  if (currentText || spans.length === 0) {
+    /** @type {TextSpan} */
+    const span = { text: currentText };
+    if (Object.keys(currentStyle).length > 0) {
+      span.style = { ...currentStyle };
+    }
+    spans.push(span);
+  }
+
+  return spans;
+}
+
+/**
+ * Parse raw screen output with ANSI codes into styled TerminalLine[].
+ * @param {string} screen - Screen content with ANSI escape codes
+ * @returns {TerminalLine[]}
+ */
+function parseStyledScreenLines(screen) {
+  if (!screen) return [];
+  return screen.split("\n").map((line) => {
+    const spans = parseAnsiLine(line);
+    // Raw text is spans joined without styles
+    const raw = spans.map((s) => s.text).join("");
+    return { spans, raw };
+  });
+}
+
+/**
+ * Find a line matching the given query.
+ * Style filters are ignored when lines don't have style information.
+ * @param {TerminalLine[]} lines - Lines to search
+ * @param {MatchQuery} query - Query with pattern and optional style filter
+ * @returns {MatchResult}
+ */
+function findMatch(lines, query) {
+  const { pattern, style } = query;
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const text = line.raw;
+
+    // Check pattern match
+    const patternMatches =
+      typeof pattern === "string" ? text.includes(pattern) : pattern.test(text);
+
+    if (!patternMatches) continue;
+
+    // If no style filter requested, we have a match
+    if (!style) {
+      return { matched: true, line, lineIndex: i };
+    }
+
+    // Check style match (if line has styled spans)
+    // Style filter is silently ignored if implementation doesn't provide styles
+    const hasStyledSpans = line.spans.some((span) => span.style);
+    if (!hasStyledSpans) {
+      // No style info available - pattern match is enough
+      return { matched: true, line, lineIndex: i };
+    }
+
+    // Check if any span matches both pattern and style
+    const styleMatches = line.spans.some((span) => {
+      if (!span.style) return false;
+      const spanMatchesPattern =
+        typeof pattern === "string" ? span.text.includes(pattern) : pattern.test(span.text);
+      if (!spanMatchesPattern) return false;
+
+      // Check each requested style property
+      const spanStyle = /** @type {Record<string, unknown>} */ (span.style);
+      for (const [key, value] of Object.entries(style)) {
+        if (spanStyle[key] !== value) return false;
+      }
+      return true;
+    });
+
+    if (styleMatches) {
+      return { matched: true, line, lineIndex: i };
+    }
+  }
+
+  return { matched: false };
+}
+
+// =============================================================================
+// Terminal Stream Implementations
+// =============================================================================
+
+/**
+ * Terminal stream that reads from JSONL log files (Claude/Codex logs).
+ * Implements TerminalStream interface.
+ * @implements {TerminalStream}
+ */
+class JsonlTerminalStream {
+  /** @type {() => string | null} */
+  logPathFinder;
+  /** @type {'claude' | 'codex'} */
+  format;
+  /** @type {string | null} */
+  logPath;
+  /** @type {number} */
+  offset;
+
+  /**
+   * @param {() => string | null} logPathFinder - Function that returns current log path (may change during session)
+   * @param {'claude' | 'codex'} format - Log format for parsing entries
+   */
+  constructor(logPathFinder, format) {
+    this.logPathFinder = logPathFinder;
+    this.format = format;
+    this.logPath = null;
+    this.offset = 0;
+  }
+
+  /**
+   * Read new lines since last read.
+   * @param {ReadOptions} [opts]
+   * @returns {Promise<TerminalLine[]>}
+   */
+  async readNext(opts = {}) {
+    // Check for new/changed log path
+    const currentLogPath = this.logPathFinder();
+    if (currentLogPath && currentLogPath !== this.logPath) {
+      this.logPath = currentLogPath;
+      // Read from beginning when file is first discovered or changed
+      if (existsSync(this.logPath)) {
+        this.offset = 0;
+      }
+    }
+
+    if (!this.logPath) {
+      return [];
+    }
+
+    const { entries, newOffset } = tailJsonl(this.logPath, this.offset);
+    this.offset = newOffset;
+
+    const lines = [];
+    for (const entry of entries) {
+      const entryLines = parseJsonlEntry(entry, this.format);
+      lines.push(...entryLines);
+    }
+
+    if (opts.max && lines.length > opts.max) {
+      return lines.slice(0, opts.max);
+    }
+
+    return lines;
+  }
+
+  /**
+   * Wait for a line matching the query.
+   * @param {MatchQuery} query
+   * @param {WaitOptions} [opts]
+   * @returns {Promise<MatchResult>}
+   */
+  async waitForMatch(query, opts = {}) {
+    const timeoutMs = opts.timeoutMs || 30000;
+    const pollInterval = 100;
+    const deadline = Date.now() + timeoutMs;
+
+    while (Date.now() < deadline) {
+      const lines = await this.readNext();
+      if (lines.length > 0) {
+        const result = findMatch(lines, query);
+        if (result.matched) {
+          return result;
+        }
+      }
+      await sleep(pollInterval);
+    }
+
+    return { matched: false };
+  }
+}
+
+/**
+ * Terminal stream that reads from tmux screen capture.
+ * Implements TerminalStream interface.
+ * @implements {TerminalStream}
+ */
+class ScreenTerminalStream {
+  /**
+   * @param {string} session - tmux session name
+   * @param {number} [scrollback] - Number of scrollback lines to capture
+   */
+  constructor(session, scrollback = 0) {
+    this.session = session;
+    this.scrollback = scrollback;
+    this.lastScreen = "";
+  }
+
+  /**
+   * Read current screen lines (returns all visible lines on each call).
+   * Note: Unlike JsonlTerminalStream, this returns the full screen each time.
+   * @param {ReadOptions} [opts]
+   * @returns {Promise<TerminalLine[]>}
+   */
+  async readNext(opts = {}) {
+    const screen = tmuxCapture(this.session, this.scrollback);
+    this.lastScreen = screen;
+
+    const lines = parseScreenLines(screen);
+
+    if (opts.max && lines.length > opts.max) {
+      return lines.slice(-opts.max); // Return last N lines for screen capture
+    }
+
+    return lines;
+  }
+
+  /**
+   * Wait for a line matching the query.
+   * @param {MatchQuery} query
+   * @param {WaitOptions} [opts]
+   * @returns {Promise<MatchResult>}
+   */
+  async waitForMatch(query, opts = {}) {
+    const timeoutMs = opts.timeoutMs || 30000;
+    const pollInterval = 100;
+    const deadline = Date.now() + timeoutMs;
+
+    while (Date.now() < deadline) {
+      const lines = await this.readNext();
+      const result = findMatch(lines, query);
+      if (result.matched) {
+        return result;
+      }
+      await sleep(pollInterval);
+    }
+
+    return { matched: false };
+  }
+
+  /**
+   * Get the last captured screen (raw string).
+   * Useful for compatibility with existing code that needs raw screen.
+   * @returns {string}
+   */
+  getLastScreen() {
+    return this.lastScreen;
+  }
+}
+
+/**
+ * Terminal stream that reads from tmux screen capture with ANSI styling.
+ * Uses `tmux capture-pane -e` to capture escape sequences.
+ * Implements TerminalStream interface.
+ * @implements {TerminalStream}
+ */
+class StyledScreenTerminalStream {
+  /**
+   * @param {string} session - tmux session name
+   * @param {number} [scrollback] - Number of scrollback lines to capture
+   */
+  constructor(session, scrollback = 0) {
+    this.session = session;
+    this.scrollback = scrollback;
+    this.lastScreen = "";
+  }
+
+  /**
+   * Read current screen lines with ANSI styling parsed.
+   * @param {ReadOptions} [opts]
+   * @returns {Promise<TerminalLine[]>}
+   */
+  async readNext(opts = {}) {
+    const screen = tmuxCapture(this.session, this.scrollback, true); // withEscapes=true
+    this.lastScreen = screen;
+
+    const lines = parseStyledScreenLines(screen);
+
+    if (opts.max && lines.length > opts.max) {
+      return lines.slice(-opts.max); // Return last N lines for screen capture
+    }
+
+    return lines;
+  }
+
+  /**
+   * Wait for a line matching the query (supports style-aware matching).
+   * @param {MatchQuery} query
+   * @param {WaitOptions} [opts]
+   * @returns {Promise<MatchResult>}
+   */
+  async waitForMatch(query, opts = {}) {
+    const timeoutMs = opts.timeoutMs || 30000;
+    const pollInterval = 100;
+    const deadline = Date.now() + timeoutMs;
+
+    while (Date.now() < deadline) {
+      const lines = await this.readNext();
+      const result = findMatch(lines, query);
+      if (result.matched) {
+        return result;
+      }
+      await sleep(pollInterval);
+    }
+
+    return { matched: false };
+  }
+
+  /**
+   * Get the last captured screen (raw string with ANSI codes).
+   * @returns {string}
+   */
+  getLastScreen() {
+    return this.lastScreen;
+  }
+}
+
+/**
+ * Fake terminal stream for testing.
+ * Implements TerminalStream interface.
+ * @implements {TerminalStream}
+ */
+class FakeTerminalStream {
+  /**
+   * @param {TerminalLine[]} lines - Initial lines to provide
+   */
+  constructor(lines = []) {
+    this.lines = [...lines];
+    this.readCount = 0;
+    /** @type {TerminalLine[][]} */
+    this.pendingLines = [];
+  }
+
+  /**
+   * Queue lines to be returned on subsequent readNext calls.
+   * @param {TerminalLine[]} lines
+   */
+  queueLines(lines) {
+    this.pendingLines.push(lines);
+  }
+
+  /**
+   * Add more lines to the current buffer (simulates new output).
+   * @param {TerminalLine[]} lines
+   */
+  addLines(lines) {
+    this.lines.push(...lines);
+  }
+
+  /**
+   * Read new lines since last read.
+   * First call returns initial lines, subsequent calls return queued lines.
+   * @param {ReadOptions} [opts]
+   * @returns {Promise<TerminalLine[]>}
+   */
+  async readNext(opts = {}) {
+    this.readCount++;
+
+    /** @type {TerminalLine[]} */
+    let result = [];
+    if (this.readCount === 1) {
+      result = this.lines;
+    } else if (this.pendingLines.length > 0) {
+      result = this.pendingLines.shift() || [];
+    }
+
+    if (opts.max && result.length > opts.max) {
+      return result.slice(0, opts.max);
+    }
+
+    return result;
+  }
+
+  /**
+   * Wait for a line matching the query.
+   * Immediately checks available lines without polling.
+   * @param {MatchQuery} query
+   * @param {WaitOptions} [_opts]
+   * @returns {Promise<MatchResult>}
+   */
+  async waitForMatch(query, _opts = {}) {
+    // Check initial lines
+    const result = findMatch(this.lines, query);
+    if (result.matched) {
+      return result;
+    }
+
+    // Check all pending lines
+    for (const pendingBatch of this.pendingLines) {
+      const batchResult = findMatch(pendingBatch, query);
+      if (batchResult.matched) {
+        return batchResult;
+      }
+    }
+
+    return { matched: false };
+  }
+
+  /**
+   * Create a TerminalLine from a raw string (helper for tests).
+   * @param {string} raw
+   * @returns {TerminalLine}
+   */
+  static line(raw) {
+    return { spans: [{ text: raw }], raw };
+  }
+
+  /**
+   * Create multiple TerminalLines from raw strings (helper for tests).
+   * @param {string[]} raws
+   * @returns {TerminalLine[]}
+   */
+  static lines(raws) {
+    return raws.map((raw) => FakeTerminalStream.line(raw));
+  }
 }
 
 /**
@@ -2108,6 +2760,7 @@ const State = {
  * @param {string[]} [config.spinners] - Spinner characters indicating thinking
  * @param {RegExp} [config.rateLimitPattern] - Pattern for rate limit detection
  * @param {(string | RegExp | ((lines: string) => boolean))[]} [config.thinkingPatterns] - Text patterns indicating thinking
+ * @param {(string | RegExp)[]} [config.activeWorkPatterns] - Patterns indicating active work (beats ready)
  * @param {(string | ((lines: string) => boolean))[]} [config.confirmPatterns] - Patterns for confirmation dialogs
  * @param {{screen: string[], lastLines: string[]} | null} [config.updatePromptPatterns] - Patterns for update prompts
  * @returns {string} The detected state
@@ -2250,7 +2903,6 @@ function detectState(screen, config) {
  * @property {string} [safeAllowedTools]
  * @property {string | null} [sessionIdFlag]
  * @property {((sessionName: string) => string | null) | null} [logPathFinder]
- * @property {((entry: object) => string | null) | null} [logEntryFormatter]
  */
 
 class Agent {
@@ -2298,8 +2950,6 @@ class Agent {
     this.sessionIdFlag = config.sessionIdFlag || null;
     /** @type {((sessionName: string) => string | null) | null} */
     this.logPathFinder = config.logPathFinder || null;
-    /** @type {((entry: object) => string | null) | null} */
-    this.logEntryFormatter = config.logEntryFormatter || null;
   }
 
   /**
@@ -2447,15 +3097,32 @@ class Agent {
   }
 
   /**
-   * Format a log entry for streaming display.
-   * @param {object} entry
-   * @returns {string | null}
+   * Create a terminal stream for reading agent output.
+   * Returns JsonlTerminalStream for agents with log file support,
+   * otherwise falls back to ScreenTerminalStream.
+   * @param {string} sessionName
+   * @returns {TerminalStream}
    */
-  formatLogEntry(entry) {
-    if (this.logEntryFormatter) {
-      return this.logEntryFormatter(entry);
+  createStream(sessionName) {
+    // Prefer JSONL stream if agent has log path finder
+    if (this.logPathFinder) {
+      /** @type {'claude' | 'codex'} */
+      const format = this.name === "claude" ? "claude" : "codex";
+      return new JsonlTerminalStream(() => this.findLogPath(sessionName), format);
     }
-    return null;
+    // Fall back to screen capture
+    return new ScreenTerminalStream(sessionName);
+  }
+
+  /**
+   * Create a styled terminal stream with ANSI color support.
+   * Only uses screen capture (JSONL doesn't have style info).
+   * @param {string} sessionName
+   * @param {number} [scrollback]
+   * @returns {StyledScreenTerminalStream}
+   */
+  createStyledStream(sessionName, scrollback = 0) {
+    return new StyledScreenTerminalStream(sessionName, scrollback);
   }
 
   /**
@@ -2704,7 +3371,6 @@ const CodexAgent = new Agent({
   reviewOptions: { branch: "1", uncommitted: "2", commit: "3", custom: "4" },
   envVar: "AX_SESSION",
   logPathFinder: findCodexLogPath,
-  logEntryFormatter: formatCodexLogEntry,
 });
 
 // =============================================================================
@@ -2754,7 +3420,6 @@ const ClaudeAgent = new Agent({
     if (uuid) return findClaudeLogPath(uuid, sessionName);
     return null;
   },
-  logEntryFormatter: formatClaudeLogEntry,
 });
 
 // =============================================================================
@@ -2906,16 +3571,18 @@ async function waitForResponse(agent, session, timeoutMs = DEFAULT_TIMEOUT_MS) {
 
 /**
  * Wait for agent response with streaming output to console.
+ * Uses TerminalStream abstraction for reading agent output.
  * @param {Agent} agent
  * @param {string} session
  * @param {number} [timeoutMs]
  * @returns {Promise<{state: string, screen: string}>}
  */
 async function streamResponse(agent, session, timeoutMs = DEFAULT_TIMEOUT_MS) {
-  let logPath = agent.findLogPath(session);
-  let logOffset = logPath && existsSync(logPath) ? statSync(logPath).size : 0;
+  // Create terminal stream for this agent/session
+  const stream = agent.createStream(session);
   let printedThinking = false;
-  debug("stream", `start: logPath=${logPath || "null"}, logOffset=${logOffset}`);
+  debug("stream", `start: using ${stream.constructor.name}`);
+
   // Sliding window for deduplication - only dedupe recent messages
   // This catches Codex's duplicate log entries (A,B,A,B pattern) while
   // allowing legitimate repeated messages across turns
@@ -2923,41 +3590,30 @@ async function streamResponse(agent, session, timeoutMs = DEFAULT_TIMEOUT_MS) {
   const recentMessages = [];
   const DEDUPE_WINDOW = 10;
 
-  const streamNewEntries = () => {
-    if (!logPath) {
-      logPath = agent.findLogPath(session);
-      if (logPath && existsSync(logPath)) {
-        // Read from beginning when file is first discovered
-        // (Claude creates log file when first message is sent)
-        debug("stream", `log file discovered: ${logPath}`);
-        logOffset = 0;
-      }
+  const streamNewLines = async () => {
+    const lines = await stream.readNext();
+    if (lines.length > 0) {
+      debug("stream", `read ${lines.length} lines`);
     }
-    if (logPath) {
-      const { entries, newOffset } = tailJsonl(logPath, logOffset);
-      if (entries.length > 0) {
-        debug("stream", `read ${entries.length} entries, offset ${logOffset} -> ${newOffset}`);
-      }
-      logOffset = newOffset;
-      for (const entry of entries) {
-        const formatted = agent.formatLogEntry(entry);
-        if (!formatted) continue;
 
-        // Dedupe messages within sliding window (Codex logs can contain duplicates)
-        // Tool calls (starting with ">") are always printed
-        if (!formatted.startsWith(">")) {
-          if (recentMessages.includes(formatted)) continue;
-          recentMessages.push(formatted);
-          if (recentMessages.length > DEDUPE_WINDOW) recentMessages.shift();
-        }
+    for (const line of lines) {
+      const text = line.raw;
+      if (!text) continue;
 
-        console.log(formatted);
+      // Dedupe messages within sliding window (Codex logs can contain duplicates)
+      // Tool calls (starting with ">") are always printed
+      if (!text.startsWith(">")) {
+        if (recentMessages.includes(text)) continue;
+        recentMessages.push(text);
+        if (recentMessages.length > DEDUPE_WINDOW) recentMessages.shift();
       }
+
+      console.log(text);
     }
   };
 
   return pollForResponse(agent, session, timeoutMs, {
-    onPoll: () => streamNewEntries(),
+    onPoll: () => streamNewLines(),
     onStateChange: (state, lastState, screen) => {
       if (state === State.THINKING && !printedThinking) {
         console.log("[THINKING]");
@@ -2970,7 +3626,7 @@ async function streamResponse(agent, session, timeoutMs = DEFAULT_TIMEOUT_MS) {
         printedThinking = false;
       }
     },
-    onReady: () => streamNewEntries(),
+    onReady: () => streamNewLines(),
   });
 }
 
@@ -5318,6 +5974,17 @@ export {
   computePermissionHash,
   formatClaudeLogEntry,
   formatCodexLogEntry,
+  // Terminal stream primitives
+  parseJsonlEntry,
+  parseScreenLines,
+  parseAnsiLine,
+  parseStyledScreenLines,
+  findMatch,
+  // Terminal stream implementations
+  JsonlTerminalStream,
+  ScreenTerminalStream,
+  StyledScreenTerminalStream,
+  FakeTerminalStream,
   CodexAgent,
   ClaudeAgent,
 };

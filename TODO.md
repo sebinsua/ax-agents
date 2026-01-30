@@ -28,6 +28,7 @@ Questions:
 - How to handle conflicts when multiple agents write?
 - Git branches per archangel?
 - How does the "parent" agent merge/review?
+- Could this be a good time to implement Pi Agents, too: https://github.com/badlogic/pi-mono/tree/main/packages/coding-agent#programmatic-usage
 
 **3. Work-Stealing / Parallel Execution**
 ```bash
