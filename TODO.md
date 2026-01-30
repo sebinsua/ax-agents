@@ -111,8 +111,3 @@ For the TUI fallback path (Codex), detect ANSI colors and text attributes to imp
 - [ ] Implement style-aware `findMatch()` function
 - [ ] Update Codex-specific state detection to use style hints where helpful
 
-## CLI Aliases
-
-Add common aliases for discoverability:
-
-- [ ] `list` → `agents` (common convention: `docker ps`, `git branch --list`)

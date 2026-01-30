@@ -5189,7 +5189,7 @@ async function main() {
   const cmd = positionals[0];
 
   // Dispatch commands
-  if (cmd === "agents") return cmdAgents();
+  if (cmd === "agents" || cmd === "list") return cmdAgents();
   if (cmd === "target") {
     const defaultSession = agent.getDefaultSession({ allowedTools: autoApprove, yolo });
     if (defaultSession) {
