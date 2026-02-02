@@ -32,6 +32,12 @@ import {
   ClaudeAgent,
 } from "./ax.js";
 
+// Helper to convert LogSegment[] to string for test comparisons
+const segmentsToString = (segments) => {
+  if (!segments) return null;
+  return segments.map((s) => s.content).join("\n");
+};
+
 // =============================================================================
 // parseCliArgs - CLI argument parsing
 // =============================================================================
@@ -858,7 +864,7 @@ describe("formatClaudeLogEntry", () => {
       type: "assistant",
       message: { content: [{ type: "text", text: "Hello world" }] },
     };
-    assert.strictEqual(formatClaudeLogEntry(entry), "Hello world");
+    assert.strictEqual(segmentsToString(formatClaudeLogEntry(entry)), "Hello world");
   });
 
   it("joins multiple text parts with newline", () => {
@@ -871,7 +877,7 @@ describe("formatClaudeLogEntry", () => {
         ],
       },
     };
-    assert.strictEqual(formatClaudeLogEntry(entry), "Line 1\nLine 2");
+    assert.strictEqual(segmentsToString(formatClaudeLogEntry(entry)), "Line 1\nLine 2");
   });
 
   it("formats tool_use as summary", () => {
@@ -881,7 +887,7 @@ describe("formatClaudeLogEntry", () => {
         content: [{ type: "tool_use", name: "Read", input: { file_path: "/path/to/file.js" } }],
       },
     };
-    assert.strictEqual(formatClaudeLogEntry(entry), "> Read(file.js)");
+    assert.strictEqual(segmentsToString(formatClaudeLogEntry(entry)), "> Read(file.js)");
   });
 
   it("formats Bash tool with command snippet", () => {
@@ -891,7 +897,7 @@ describe("formatClaudeLogEntry", () => {
         content: [{ type: "tool_use", name: "Bash", input: { command: "npm install && npm test" } }],
       },
     };
-    assert.strictEqual(formatClaudeLogEntry(entry), "> Bash(npm install && npm test)");
+    assert.strictEqual(segmentsToString(formatClaudeLogEntry(entry)), "> Bash(npm install && npm test)");
   });
 
   it("truncates long Bash commands", () => {
@@ -902,7 +908,7 @@ describe("formatClaudeLogEntry", () => {
         content: [{ type: "tool_use", name: "Bash", input: { command: longCommand } }],
       },
     };
-    const result = formatClaudeLogEntry(entry);
+    const result = segmentsToString(formatClaudeLogEntry(entry));
     assert.ok(result.startsWith("> Bash("));
     assert.ok(result.length < 70); // 50 char command + "> Bash()"
   });
@@ -915,7 +921,7 @@ describe("formatClaudeLogEntry", () => {
       },
     };
     // pattern field is extracted as target
-    assert.strictEqual(formatClaudeLogEntry(entry), "> Grep(TODO)");
+    assert.strictEqual(segmentsToString(formatClaudeLogEntry(entry)), "> Grep(TODO)");
   });
 
   it("returns null for empty content", () => {
@@ -933,7 +939,24 @@ describe("formatClaudeLogEntry", () => {
         ],
       },
     };
-    assert.strictEqual(formatClaudeLogEntry(entry), "Let me think...\nHere's my answer");
+    assert.strictEqual(segmentsToString(formatClaudeLogEntry(entry)), "Let me think...\nHere's my answer");
+  });
+
+  it("returns correct segment types", () => {
+    const entry = {
+      type: "assistant",
+      message: {
+        content: [
+          { type: "thinking", thinking: "Let me think..." },
+          { type: "text", text: "Answer" },
+          { type: "tool_use", name: "Read", input: { file_path: "/test.js" } },
+        ],
+      },
+    };
+    const segments = formatClaudeLogEntry(entry);
+    assert.strictEqual(segments[0].type, "thinking");
+    assert.strictEqual(segments[1].type, "text");
+    assert.strictEqual(segments[2].type, "tool");
   });
 });
 
@@ -959,7 +982,7 @@ describe("formatCodexLogEntry", () => {
         arguments: JSON.stringify({ command: "git status", workdir: "/test" }),
       },
     };
-    assert.strictEqual(formatCodexLogEntry(entry), "> shell_command(git status)");
+    assert.strictEqual(segmentsToString(formatCodexLogEntry(entry)), "> shell_command(git status)");
   });
 
   it("formats function_call with file path", () => {
@@ -971,7 +994,7 @@ describe("formatCodexLogEntry", () => {
         arguments: JSON.stringify({ file_path: "/path/to/file.js" }),
       },
     };
-    assert.strictEqual(formatCodexLogEntry(entry), "> read_file(file.js)");
+    assert.strictEqual(segmentsToString(formatCodexLogEntry(entry)), "> read_file(file.js)");
   });
 
   it("handles malformed JSON in arguments", () => {
@@ -983,7 +1006,7 @@ describe("formatCodexLogEntry", () => {
         arguments: "not valid json",
       },
     };
-    assert.strictEqual(formatCodexLogEntry(entry), "> some_tool(...)");
+    assert.strictEqual(segmentsToString(formatCodexLogEntry(entry)), "> some_tool(...)");
   });
 
   it("extracts text from assistant message with output_text", () => {
@@ -995,7 +1018,7 @@ describe("formatCodexLogEntry", () => {
         content: [{ type: "output_text", text: "Here is my response" }],
       },
     };
-    assert.strictEqual(formatCodexLogEntry(entry), "Here is my response");
+    assert.strictEqual(segmentsToString(formatCodexLogEntry(entry)), "Here is my response");
   });
 
   it("extracts text from assistant message with text type", () => {
@@ -1007,7 +1030,7 @@ describe("formatCodexLogEntry", () => {
         content: [{ type: "text", text: "Alternative format" }],
       },
     };
-    assert.strictEqual(formatCodexLogEntry(entry), "Alternative format");
+    assert.strictEqual(segmentsToString(formatCodexLogEntry(entry)), "Alternative format");
   });
 
   it("returns null for non-assistant messages", () => {
@@ -1030,7 +1053,20 @@ describe("formatCodexLogEntry", () => {
         message: "Streaming response text",
       },
     };
-    assert.strictEqual(formatCodexLogEntry(entry), "Streaming response text");
+    assert.strictEqual(segmentsToString(formatCodexLogEntry(entry)), "Streaming response text");
+  });
+
+  it("handles agent_reasoning event with thinking type", () => {
+    const entry = {
+      type: "event_msg",
+      payload: {
+        type: "agent_reasoning",
+        text: "Thinking about the problem...",
+      },
+    };
+    const segments = formatCodexLogEntry(entry);
+    assert.strictEqual(segments[0].type, "thinking");
+    assert.strictEqual(segments[0].content, "Thinking about the problem...");
   });
 
   it("returns null for other event_msg types", () => {

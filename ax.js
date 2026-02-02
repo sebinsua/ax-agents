@@ -2932,6 +2932,36 @@ const State = {
 };
 
 /**
+ * Check if the prompt symbol appears with bold styling in the last lines.
+ * Used to distinguish actual prompts from text that happens to contain the symbol.
+ * @param {string} session - tmux session name
+ * @param {string} promptSymbol - The prompt symbol to look for
+ * @returns {boolean}
+ */
+function hasStyledPrompt(session, promptSymbol) {
+  const styledScreen = tmuxCapture(session, 0, true); // withEscapes=true
+
+  // If styled capture fails, fall back to allowing READY to avoid deadlock
+  if (!styledScreen) {
+    debug("state", "styled capture failed, falling back to unstyled check");
+    return true;
+  }
+
+  // Trim to match detectState behavior (removes trailing blank lines)
+  const lines = parseStyledScreenLines(styledScreen.trim());
+  const lastLines = lines.slice(-8);
+
+  for (const line of lastLines) {
+    for (const span of line.spans) {
+      if (span.text.includes(promptSymbol) && span.style?.bold) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+/**
  * Pure function to detect agent state from screen content.
  * @param {string} screen - The screen content to analyze
  * @param {Object} config - Agent configuration for pattern matching
@@ -2942,6 +2972,8 @@ const State = {
  * @param {(string | RegExp)[]} [config.activeWorkPatterns] - Patterns indicating active work (beats ready)
  * @param {(string | ((lines: string) => boolean))[]} [config.confirmPatterns] - Patterns for confirmation dialogs
  * @param {{screen: string[], lastLines: string[]} | null} [config.updatePromptPatterns] - Patterns for update prompts
+ * @param {string} [config.session] - tmux session for styled prompt verification
+ * @param {boolean} [config.requireStyledPrompt] - If true, require prompt to be bold (Codex)
  * @returns {string} The detected state
  */
 function detectState(screen, config) {
@@ -3008,8 +3040,18 @@ function detectState(screen, config) {
   // Ready - check BEFORE thinking to avoid false positives from timing messages like "✻ Worked for 45s"
   // If the prompt symbol is visible, the agent is ready regardless of spinner characters in timing messages
   if (lastLines.includes(config.promptSymbol)) {
-    debug("state", `promptSymbol "${config.promptSymbol}" found -> READY`);
-    return State.READY;
+    // If styled prompt check is enabled, verify prompt has expected styling
+    // This prevents false positives from output containing the prompt symbol
+    if (config.requireStyledPrompt && config.session) {
+      if (hasStyledPrompt(config.session, config.promptSymbol)) {
+        debug("state", `promptSymbol "${config.promptSymbol}" found with bold styling -> READY`);
+        return State.READY;
+      }
+      debug("state", `promptSymbol "${config.promptSymbol}" found but not bold, continuing checks`);
+    } else {
+      debug("state", `promptSymbol "${config.promptSymbol}" found -> READY`);
+      return State.READY;
+    }
   }
 
   // Thinking - spinners (check last lines only)
@@ -3082,6 +3124,7 @@ function detectState(screen, config) {
  * @property {string} [safeAllowedTools]
  * @property {string | null} [sessionIdFlag]
  * @property {((sessionName: string) => string | null) | null} [logPathFinder]
+ * @property {boolean} [requireStyledPrompt] - If true, require prompt to be bold for READY detection
  */
 
 class Agent {
@@ -3129,6 +3172,8 @@ class Agent {
     this.sessionIdFlag = config.sessionIdFlag || null;
     /** @type {((sessionName: string) => string | null) | null} */
     this.logPathFinder = config.logPathFinder || null;
+    /** @type {boolean} */
+    this.requireStyledPrompt = config.requireStyledPrompt || false;
   }
 
   /**
@@ -3307,9 +3352,10 @@ class Agent {
 
   /**
    * @param {string} screen
+   * @param {string} [session] - Optional session for styled prompt verification
    * @returns {string}
    */
-  getState(screen) {
+  getState(screen, session) {
     return detectState(screen, {
       promptSymbol: this.promptSymbol,
       spinners: this.spinners,
@@ -3318,6 +3364,8 @@ class Agent {
       activeWorkPatterns: this.activeWorkPatterns,
       confirmPatterns: this.confirmPatterns,
       updatePromptPatterns: this.updatePromptPatterns,
+      session,
+      requireStyledPrompt: this.requireStyledPrompt,
     });
   }
 
@@ -3551,6 +3599,7 @@ const CodexAgent = new Agent({
   reviewOptions: { branch: "1", uncommitted: "2", commit: "3", custom: "4" },
   envVar: "AX_SESSION",
   logPathFinder: findCodexLogPath,
+  requireStyledPrompt: true, // Codex prompt is bold, use this to avoid false positives
 });
 
 // =============================================================================
@@ -3617,7 +3666,7 @@ const ClaudeAgent = new Agent({
 async function waitUntilReady(agent, session, timeoutMs = DEFAULT_TIMEOUT_MS) {
   const start = Date.now();
   const initialScreen = tmuxCapture(session);
-  const initialState = agent.getState(initialScreen);
+  const initialState = agent.getState(initialScreen, session);
   debug("waitUntilReady", `start: initialState=${initialState}, timeout=${timeoutMs}ms`);
 
   // Dismiss feedback modal if present
@@ -3638,7 +3687,7 @@ async function waitUntilReady(agent, session, timeoutMs = DEFAULT_TIMEOUT_MS) {
   while (Date.now() - start < timeoutMs) {
     await sleep(POLL_MS);
     const screen = tmuxCapture(session);
-    const state = agent.getState(screen);
+    const state = agent.getState(screen, session);
 
     // Dismiss feedback modal if it appears
     if (state === State.FEEDBACK_MODAL) {
@@ -3669,7 +3718,7 @@ async function pollForResponse(agent, session, timeoutMs, hooks = {}) {
   const { onPoll, onStateChange, onReady } = hooks;
   const start = Date.now();
   const initialScreen = tmuxCapture(session);
-  const initialState = agent.getState(initialScreen);
+  const initialState = agent.getState(initialScreen, session);
   debug("poll", `start: initialState=${initialState}, timeoutMs=${timeoutMs}`);
 
   let lastScreen = initialScreen;
@@ -3685,7 +3734,7 @@ async function pollForResponse(agent, session, timeoutMs, hooks = {}) {
 
   while (Date.now() - start < timeoutMs) {
     const screen = tmuxCapture(session);
-    const state = agent.getState(screen);
+    const state = agent.getState(screen, session);
 
     if (onPoll) onPoll(screen, state);
 
@@ -3806,7 +3855,9 @@ async function streamResponse(agent, session, timeoutMs = DEFAULT_TIMEOUT_MS) {
         printedThinking = true;
       } else if (state === State.CONFIRMING) {
         const pendingTool = extractPendingToolFromScreen(screen);
-        console.log(styleText("yellow", pendingTool ? `[CONFIRMING] ${pendingTool}` : "[CONFIRMING]"));
+        console.log(
+          styleText("yellow", pendingTool ? `[CONFIRMING] ${pendingTool}` : "[CONFIRMING]"),
+        );
       }
       if (lastState === State.THINKING && state !== State.THINKING) {
         printedThinking = false;
@@ -3888,7 +3939,7 @@ async function cmdStart(agent, session, { yolo = false, allowedTools = null } = 
   const start = Date.now();
   while (Date.now() - start < STARTUP_TIMEOUT_MS) {
     const screen = tmuxCapture(session);
-    const state = agent.getState(screen);
+    const state = agent.getState(screen, session);
 
     if (state === State.UPDATE_PROMPT) {
       await agent.handleUpdatePrompt(session);
@@ -3949,7 +4000,7 @@ function cmdAgents() {
     const parsed = /** @type {ParsedSession} */ (parseSessionName(session));
     const agent = parsed.tool === "claude" ? ClaudeAgent : CodexAgent;
     const screen = tmuxCapture(session);
-    const state = agent.getState(screen);
+    const state = agent.getState(screen, session);
     const type = parsed.archangelName ? "archangel" : "-";
     const isDefault =
       (parsed.tool === "claude" && session === claudeDefault) ||
@@ -4112,7 +4163,7 @@ async function cmdArchangel(agentName) {
   const start = Date.now();
   while (Date.now() - start < ARCHANGEL_STARTUP_TIMEOUT_MS) {
     const screen = tmuxCapture(sessionName);
-    const state = agent.getState(screen);
+    const state = agent.getState(screen, sessionName);
 
     if (state === State.UPDATE_PROMPT) {
       await agent.handleUpdatePrompt(sessionName);
@@ -4278,7 +4329,7 @@ async function cmdArchangel(agentName) {
 
       // Wait for ready
       const screen = tmuxCapture(sessionName);
-      const state = agent.getState(screen);
+      const state = agent.getState(screen, sessionName);
 
       if (state === State.RATE_LIMITED) {
         console.error(`[archangel:${agentName}] Rate limited - stopping`);
@@ -5425,7 +5476,7 @@ async function cmdApprove(agent, session, { wait = false, timeoutMs } = {}) {
   }
 
   const before = tmuxCapture(session);
-  const beforeState = agent.getState(before);
+  const beforeState = agent.getState(before, session);
   if (beforeState !== State.CONFIRMING) {
     console.log(`Already ${beforeState}`);
     return;
@@ -5463,7 +5514,7 @@ async function cmdReject(agent, session, { wait = false, timeoutMs } = {}) {
   }
 
   const before = tmuxCapture(session);
-  const beforeState = agent.getState(before);
+  const beforeState = agent.getState(before, session);
   if (beforeState !== State.CONFIRMING) {
     console.log(`Already ${beforeState}`);
     return;
@@ -5657,7 +5708,7 @@ async function cmdOutput(
     screen = tmuxCapture(session, 500);
   }
 
-  const state = agent.getState(screen);
+  const state = agent.getState(screen, session);
 
   if (state === State.RATE_LIMITED) {
     console.log(`RATE_LIMITED: ${agent.parseRetryTime(screen)}`);
@@ -5696,7 +5747,7 @@ function cmdStatus(agent, session) {
   }
 
   const screen = tmuxCapture(session);
-  const state = agent.getState(screen);
+  const state = agent.getState(screen, session);
 
   if (state === State.RATE_LIMITED) {
     console.log(`RATE_LIMITED: ${agent.parseRetryTime(screen)}`);
@@ -5730,7 +5781,7 @@ function cmdDebug(agent, session, { scrollback = 0 } = {}) {
   }
 
   const screen = tmuxCapture(session, scrollback);
-  const state = agent.getState(screen);
+  const state = agent.getState(screen, session);
 
   console.log(`=== Session: ${session} ===`);
   console.log(`=== State: ${state} ===`);
