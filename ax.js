@@ -31,7 +31,7 @@ import { randomUUID, createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 import os from "node:os";
-import { parseArgs } from "node:util";
+import { parseArgs, styleText } from "node:util";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -161,6 +161,14 @@ const VERSION = packageJson.version;
  * @typedef {Object} TerminalLine
  * @property {TextSpan[]} spans - Styled text spans
  * @property {string} raw - Raw text content (spans joined, styles stripped)
+ * @property {'text' | 'thinking' | 'tool'} [lineType] - Content type for styling
+ */
+
+/**
+ * A segment of log output with type information
+ * @typedef {Object} LogSegment
+ * @property {'text' | 'thinking' | 'tool'} type - Content type
+ * @property {string} content - The text content
  */
 
 /**
@@ -201,12 +209,27 @@ const VERSION = packageJson.version;
 
 const DEBUG = process.env.AX_DEBUG === "1";
 
+// ANSI colour codes for debug output
+const COLORS = {
+  reset: "\x1b[0m",
+  bright: "\x1b[1m",
+  cyan: "\x1b[96m", // Bright cyan
+  magenta: "\x1b[95m", // Bright magenta
+  yellow: "\x1b[93m", // Bright yellow
+  red: "\x1b[91m", // Bright red
+};
+
 /**
  * @param {string} context
  * @param {unknown} err
  */
 function debugError(context, err) {
-  if (DEBUG) console.error(`[debug:${context}]`, err instanceof Error ? err.message : err);
+  if (DEBUG) {
+    const msg = err instanceof Error ? err.message : err;
+    console.error(
+      `${COLORS.bright}${COLORS.red}[error:${context}]${COLORS.reset} ${COLORS.magenta}${msg}${COLORS.reset}`,
+    );
+  }
 }
 
 /**
@@ -215,7 +238,11 @@ function debugError(context, err) {
  * @param {string} message - The debug message
  */
 function debug(tag, message) {
-  if (DEBUG) console.error(`[${tag}] ${message}`);
+  if (DEBUG) {
+    console.error(
+      `${COLORS.bright}${COLORS.cyan}[${tag}]${COLORS.reset} ${COLORS.yellow}${message}${COLORS.reset}`,
+    );
+  }
 }
 
 // =============================================================================
@@ -346,6 +373,23 @@ function tmuxKill(session) {
     tmux(["kill-session", "-t", session]);
   } catch (err) {
     debugError("tmuxKill", err);
+  }
+}
+
+/**
+ * Rename a tmux session.
+ * @param {string} oldName
+ * @param {string} newName
+ * @returns {boolean}
+ */
+function tmuxRenameSession(oldName, newName) {
+  try {
+    tmux(["rename-session", "-t", oldName, newName]);
+    debug("tmux", `renamed session: ${oldName} -> ${newName}`);
+    return true;
+  } catch (err) {
+    debugError("tmuxRenameSession", err);
+    return false;
   }
 }
 
@@ -784,6 +828,31 @@ function generateSessionName(tool, { allowedTools = null, yolo = false } = {}) {
 }
 
 /**
+ * Rebuild a session name with a new UUID, preserving other attributes.
+ * @param {string} sessionName - existing session name
+ * @param {string} newUuid - new UUID to use
+ * @returns {string | null}
+ */
+function rebuildSessionName(sessionName, newUuid) {
+  const parsed = parseSessionName(sessionName);
+  if (!parsed || !parsed.uuid) return null;
+
+  // Archangel sessions: {tool}-archangel-{name}-{uuid}
+  if (parsed.archangelName) {
+    return `${parsed.tool}-archangel-${parsed.archangelName}-${newUuid}`;
+  }
+
+  // Partner sessions: {tool}-partner-{uuid}[-p{hash}|-yolo]
+  let name = `${parsed.tool}-partner-${newUuid}`;
+  if (parsed.yolo) {
+    name += "-yolo";
+  } else if (parsed.permissionHash) {
+    name += `-p${parsed.permissionHash}`;
+  }
+  return name;
+}
+
+/**
  * Quick hash for change detection (not cryptographic).
  * @param {string | null | undefined} str
  * @returns {string | null}
@@ -861,6 +930,42 @@ function findClaudeLogPath(sessionId, sessionName) {
 
   debug("log", `findClaudeLogPath: not found`);
   return null;
+}
+
+/**
+ * Find the most recently created Claude session UUID for a project.
+ * @param {string} sessionName - tmux session name (used to get cwd)
+ * @returns {string | null}
+ */
+function findNewestClaudeSessionUuid(sessionName) {
+  const cwd = getTmuxSessionCwd(sessionName) || process.cwd();
+  const projectPath = getClaudeProjectPath(cwd);
+  const claudeProjectDir = path.join(CLAUDE_CONFIG_DIR, "projects", projectPath);
+  const indexPath = path.join(claudeProjectDir, "sessions-index.json");
+
+  if (!existsSync(indexPath)) {
+    debug("log", `findNewestClaudeSessionUuid: no index at ${indexPath}`);
+    return null;
+  }
+
+  try {
+    const index = JSON.parse(readFileSync(indexPath, "utf-8"));
+    if (!index.entries?.length) return null;
+
+    // Sort by created timestamp (most recent first)
+    const sorted = [...index.entries].sort((a, b) => {
+      const aTime = a.created ? new Date(a.created).getTime() : 0;
+      const bTime = b.created ? new Date(b.created).getTime() : 0;
+      return bTime - aTime;
+    });
+
+    const newest = sorted[0];
+    debug("log", `findNewestClaudeSessionUuid: newest=${newest.sessionId}`);
+    return newest.sessionId;
+  } catch (err) {
+    debugError("findNewestClaudeSessionUuid", err);
+    return null;
+  }
 }
 
 /**
@@ -1134,6 +1239,11 @@ function tailJsonl(logPath, fromOffset) {
  * @param {{type?: string, message?: {content?: Array<{type?: string, text?: string, thinking?: string, name?: string, input?: ToolInput, tool?: string, arguments?: ToolInput}>}}} entry
  * @returns {string | null}
  */
+/**
+ * Format a Claude JSONL log entry for streaming display.
+ * @param {{type?: string, message?: {content?: Array<{type?: string, text?: string, thinking?: string, name?: string, tool?: string, input?: {command?: string, file_path?: string, path?: string, pattern?: string, description?: string, subagent_type?: string}, arguments?: {command?: string, file_path?: string, path?: string, pattern?: string, description?: string, subagent_type?: string}}>}}} entry
+ * @returns {LogSegment[] | null}
+ */
 function formatClaudeLogEntry(entry) {
   // Skip tool_result entries (they can be very verbose)
   if (entry.type === "tool_result") return null;
@@ -1142,29 +1252,34 @@ function formatClaudeLogEntry(entry) {
   if (entry.type !== "assistant") return null;
 
   const parts = entry.message?.content || [];
+  /** @type {LogSegment[]} */
   const output = [];
 
   for (const part of parts) {
     if (part.type === "text" && part.text) {
-      output.push(part.text);
+      output.push({ type: "text", content: part.text });
     } else if (part.type === "thinking" && part.thinking) {
       // Include thinking blocks - extended thinking models put responses here
-      output.push(part.thinking);
+      output.push({ type: "thinking", content: part.thinking });
     } else if (part.type === "tool_use" || part.type === "tool_call") {
       const name = part.name || part.tool || "tool";
       const input = part.input || part.arguments || {};
       let summary;
       if (name === "Bash" && input.command) {
         summary = input.command.slice(0, 50);
+      } else if (name === "Task" && (input.description || input.subagent_type)) {
+        // Task tool: show description or subagent type
+        summary = input.description || input.subagent_type || "";
+        summary = summary.slice(0, 40);
       } else {
         const target = input.file_path || input.path || input.pattern || "";
         summary = target.split("/").pop() || target.slice(0, 30);
       }
-      output.push(`> ${name}(${summary})`);
+      output.push({ type: "tool", content: `> ${name}(${summary})` });
     }
   }
 
-  return output.length > 0 ? output.join("\n") : null;
+  return output.length > 0 ? output : null;
 }
 
 /**
@@ -1175,7 +1290,7 @@ function formatClaudeLogEntry(entry) {
  * - {type: "event_msg", payload: {type: "agent_message", message: "..."}}
  * - {type: "event_msg", payload: {type: "agent_reasoning", text: "..."}}
  * @param {{type?: string, payload?: {type?: string, role?: string, name?: string, arguments?: string, message?: string, text?: string, content?: Array<{type?: string, text?: string}>}}} entry
- * @returns {string | null}
+ * @returns {LogSegment[] | null}
  */
 function formatCodexLogEntry(entry) {
   // Skip function_call_output entries (equivalent to tool_result - can be verbose)
@@ -1191,6 +1306,10 @@ function formatCodexLogEntry(entry) {
       const args = JSON.parse(entry.payload.arguments || "{}");
       if (name === "shell_command" && args.command) {
         summary = args.command.slice(0, 50);
+      } else if (name === "Task" && (args.description || args.subagent_type)) {
+        // Task tool: show description or subagent type
+        summary = args.description || args.subagent_type || "";
+        summary = summary.slice(0, 40);
       } else {
         const target = args.file_path || args.path || args.pattern || "";
         summary = target.split("/").pop() || target.slice(0, 30);
@@ -1198,29 +1317,32 @@ function formatCodexLogEntry(entry) {
     } catch {
       summary = "...";
     }
-    return `> ${name}(${summary})`;
+    return [{ type: "tool", content: `> ${name}(${summary})` }];
   }
 
   // Handle assistant messages (final response)
   if (entry.type === "response_item" && entry.payload?.role === "assistant") {
     const parts = entry.payload.content || [];
+    /** @type {LogSegment[]} */
     const output = [];
     for (const part of parts) {
       if ((part.type === "output_text" || part.type === "text") && part.text) {
-        output.push(part.text);
+        output.push({ type: "text", content: part.text });
       }
     }
-    return output.length > 0 ? output.join("\n") : null;
+    return output.length > 0 ? output : null;
   }
 
   // Handle streaming agent messages
   if (entry.type === "event_msg" && entry.payload?.type === "agent_message") {
-    return entry.payload.message || null;
+    const message = entry.payload.message;
+    return message ? [{ type: "text", content: message }] : null;
   }
 
   // Handle agent reasoning (thinking during review)
   if (entry.type === "event_msg" && entry.payload?.type === "agent_reasoning") {
-    return entry.payload.text || null;
+    const text = entry.payload.text;
+    return text ? [{ type: "thinking", content: text }] : null;
   }
 
   return null;
@@ -1238,14 +1360,23 @@ function formatCodexLogEntry(entry) {
  * @returns {TerminalLine[]}
  */
 function parseJsonlEntry(entry, format) {
-  const formatted = format === "claude" ? formatClaudeLogEntry(entry) : formatCodexLogEntry(entry);
-  if (!formatted) return [];
+  const segments = format === "claude" ? formatClaudeLogEntry(entry) : formatCodexLogEntry(entry);
+  if (!segments) return [];
 
-  // Split on newlines and create a TerminalLine for each
-  return formatted.split("\n").map((line) => ({
-    spans: [{ text: line }],
-    raw: line,
-  }));
+  // Convert segments to TerminalLines, splitting multiline content
+  /** @type {TerminalLine[]} */
+  const lines = [];
+  for (const segment of segments) {
+    const contentLines = segment.content.split("\n");
+    for (const line of contentLines) {
+      lines.push({
+        spans: [{ text: line }],
+        raw: line,
+        lineType: segment.type,
+      });
+    }
+  }
+  return lines;
 }
 
 /**
@@ -1498,16 +1629,23 @@ class JsonlTerminalStream {
   logPath;
   /** @type {number} */
   offset;
+  /** @type {boolean} */
+  skipExisting;
+  /** @type {boolean} */
+  initialized;
 
   /**
    * @param {() => string | null} logPathFinder - Function that returns current log path (may change during session)
    * @param {'claude' | 'codex'} format - Log format for parsing entries
+   * @param {{skipExisting?: boolean}} [opts] - Options
    */
-  constructor(logPathFinder, format) {
+  constructor(logPathFinder, format, opts = {}) {
     this.logPathFinder = logPathFinder;
     this.format = format;
     this.logPath = null;
     this.offset = 0;
+    this.skipExisting = opts.skipExisting ?? false;
+    this.initialized = false;
   }
 
   /**
@@ -1520,9 +1658,15 @@ class JsonlTerminalStream {
     const currentLogPath = this.logPathFinder();
     if (currentLogPath && currentLogPath !== this.logPath) {
       this.logPath = currentLogPath;
-      // Read from beginning when file is first discovered or changed
       if (existsSync(this.logPath)) {
-        this.offset = 0;
+        if (this.skipExisting && !this.initialized) {
+          // Skip to end of file - only read new content
+          this.offset = statSync(this.logPath).size;
+          this.initialized = true;
+        } else {
+          // Read from beginning
+          this.offset = 0;
+        }
       }
     }
 
@@ -3136,14 +3280,15 @@ class Agent {
    * Returns JsonlTerminalStream for agents with log file support,
    * otherwise falls back to ScreenTerminalStream.
    * @param {string} sessionName
+   * @param {{skipExisting?: boolean}} [opts] - Options
    * @returns {TerminalStream}
    */
-  createStream(sessionName) {
+  createStream(sessionName, opts = {}) {
     // Prefer JSONL stream if agent has log path finder
     if (this.logPathFinder) {
       /** @type {'claude' | 'codex'} */
       const format = this.name === "claude" ? "claude" : "codex";
-      return new JsonlTerminalStream(() => this.findLogPath(sessionName), format);
+      return new JsonlTerminalStream(() => this.findLogPath(sessionName), format, opts);
     }
     // Fall back to screen capture
     return new ScreenTerminalStream(sessionName);
@@ -3614,7 +3759,8 @@ async function waitForResponse(agent, session, timeoutMs = DEFAULT_TIMEOUT_MS) {
  */
 async function streamResponse(agent, session, timeoutMs = DEFAULT_TIMEOUT_MS) {
   // Create terminal stream for this agent/session
-  const stream = agent.createStream(session);
+  // Skip existing content - only stream new responses
+  const stream = agent.createStream(session, { skipExisting: true });
   let printedThinking = false;
   debug("stream", `start: using ${stream.constructor.name}`);
 
@@ -3636,14 +3782,19 @@ async function streamResponse(agent, session, timeoutMs = DEFAULT_TIMEOUT_MS) {
       if (!text) continue;
 
       // Dedupe messages within sliding window (Codex logs can contain duplicates)
-      // Tool calls (starting with ">") are always printed
-      if (!text.startsWith(">")) {
+      // Tool calls are exempt: lineType === "tool" for JSONL streams, or starts with ">" for screen streams
+      const isToolLine = line.lineType === "tool" || (!line.lineType && text.startsWith(">"));
+      if (!isToolLine) {
         if (recentMessages.includes(text)) continue;
         recentMessages.push(text);
         if (recentMessages.length > DEDUPE_WINDOW) recentMessages.shift();
       }
 
-      console.log(text);
+      // Style based on content type
+      // For screen streams, tool lines start with ">" and should be dimmed
+      const isThinking = line.lineType === "thinking";
+      const styled = isToolLine || isThinking ? styleText("dim", text) : text;
+      console.log(styled);
     }
   };
 
@@ -3651,11 +3802,11 @@ async function streamResponse(agent, session, timeoutMs = DEFAULT_TIMEOUT_MS) {
     onPoll: () => streamNewLines(),
     onStateChange: (state, lastState, screen) => {
       if (state === State.THINKING && !printedThinking) {
-        console.log("[THINKING]");
+        console.log(styleText("dim", "[THINKING]"));
         printedThinking = true;
       } else if (state === State.CONFIRMING) {
         const pendingTool = extractPendingToolFromScreen(screen);
-        console.log(pendingTool ? `[CONFIRMING] ${pendingTool}` : "[CONFIRMING]");
+        console.log(styleText("yellow", pendingTool ? `[CONFIRMING] ${pendingTool}` : "[CONFIRMING]"));
       }
       if (lastState === State.THINKING && state !== State.THINKING) {
         printedThinking = false;
@@ -5769,7 +5920,7 @@ Archangels:
 Recovery/State:
   status                    Exit code: ready=0 rate_limit=2 confirm=3 thinking=4
   output [-N]               Show response (0=last, -1=prev, -2=older)
-  debug                     Show raw screen output and detected state
+  debug [SESSION]           Show raw screen output and detected state
   approve                   Approve pending action (send 'y')
   reject                    Reject pending action (send 'n')
   select N                  Select menu option N
@@ -5906,8 +6057,14 @@ async function main() {
   if (cmd === "recall") return cmdRecall(positionals[1]);
   if (cmd === "archangel") return cmdArchangel(positionals[1]);
   if (cmd === "kill") return cmdKill(session, { all, orphans, force });
-  if (cmd === "attach") return cmdAttach(positionals[1] || session);
-  if (cmd === "log") return cmdLog(positionals[1] || session, { tail, reasoning, follow });
+  if (cmd === "attach") {
+    const attachSession = positionals[1] ? resolveSessionName(positionals[1]) : session;
+    return cmdAttach(attachSession);
+  }
+  if (cmd === "log") {
+    const logSession = positionals[1] ? resolveSessionName(positionals[1]) : session;
+    return cmdLog(logSession, { tail, reasoning, follow });
+  }
   if (cmd === "mailbox") return cmdMailbox({ limit, branch, all });
   if (cmd === "rfp") {
     if (positionals[1] === "wait") {
@@ -5937,7 +6094,10 @@ async function main() {
     });
   }
   if (cmd === "status") return cmdStatus(agent, session);
-  if (cmd === "debug") return cmdDebug(agent, session);
+  if (cmd === "debug") {
+    const debugSession = positionals[1] ? resolveSessionName(positionals[1]) : session;
+    return cmdDebug(agent, debugSession);
+  }
   if (cmd === "output") {
     const indexArg = positionals[1];
     const index = indexArg?.startsWith("-") ? parseInt(indexArg, 10) : 0;
@@ -5946,7 +6106,23 @@ async function main() {
   if (cmd === "send" && positionals.length > 1)
     return cmdSend(session, positionals.slice(1).join(" "));
   if (cmd === "compact") return cmdAsk(agent, session, "/compact", { noWait: true, timeoutMs });
-  if (cmd === "reset") return cmdAsk(agent, session, "/new", { noWait: true, timeoutMs });
+  if (cmd === "reset") {
+    // Send /new and wait for completion
+    await cmdAsk(agent, session, "/new", { timeoutMs });
+
+    // Find the newest session UUID and rename tmux session to match
+    if (session && agent.name === "claude") {
+      const newUuid = findNewestClaudeSessionUuid(session);
+      if (newUuid) {
+        const newName = rebuildSessionName(session, newUuid);
+        if (newName && newName !== session) {
+          tmuxRenameSession(session, newName);
+          console.log(`Session: ${newName}`);
+        }
+      }
+    }
+    return;
+  }
   if (cmd === "select" && positionals[1])
     return cmdSelect(agent, session, positionals[1], { wait, timeoutMs });
 
