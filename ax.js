@@ -304,6 +304,41 @@ function tmuxSendLiteral(session, text) {
 }
 
 /**
+ * Paste text into a tmux session using load-buffer + paste-buffer.
+ * More reliable than send-keys -l for large text.
+ * Uses a named buffer to avoid races with concurrent invocations.
+ * @param {string} session
+ * @param {string} text
+ */
+function tmuxPasteLiteral(session, text) {
+  debug("tmux", `pasteLiteral session=${session}, text=${text.slice(0, 50)}...`);
+  // Use unique buffer name per invocation to avoid races (even to same session)
+  const bufferName = `ax-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  // Load text into named tmux buffer from stdin
+  const loadResult = spawnSync("tmux", ["load-buffer", "-b", bufferName, "-"], {
+    input: text,
+    encoding: "utf-8",
+  });
+  if (loadResult.status !== 0) {
+    debug("tmux", `load-buffer failed: ${loadResult.stderr}`);
+    throw new Error(loadResult.stderr || "tmux load-buffer failed");
+  }
+  try {
+    // Paste buffer into the session
+    tmux(["paste-buffer", "-b", bufferName, "-t", session]);
+    // Ensure cursor is at end of pasted text
+    tmux(["send-keys", "-t", session, "End"]);
+  } finally {
+    // Clean up the named buffer
+    try {
+      tmux(["delete-buffer", "-b", bufferName]);
+    } catch (err) {
+      debugError("tmuxPasteLiteral", err);
+    }
+  }
+}
+
+/**
  * @param {string} session
  */
 function tmuxKill(session) {
@@ -5175,8 +5210,13 @@ async function cmdAsk(
     ? /** @type {string} */ (session)
     : await cmdStart(agent, session, { yolo, allowedTools });
 
-  tmuxSendLiteral(activeSession, message);
-  await sleep(200);
+  if (sessionExists) {
+    await waitUntilReady(agent, activeSession, timeoutMs);
+    tmuxSend(activeSession, "C-u"); // Clear any stale input
+    await sleep(50);
+  }
+
+  tmuxPasteLiteral(activeSession, message);
   tmuxSend(activeSession, "Enter");
 
   if (noWait) {
@@ -5363,6 +5403,12 @@ async function cmdReview(
   const activeSession = sessionExists
     ? /** @type {string} */ (session)
     : await cmdStart(agent, session, { yolo });
+
+  if (sessionExists) {
+    await waitUntilReady(agent, activeSession, timeoutMs);
+    tmuxSend(activeSession, "C-u"); // Clear any stale input
+    await sleep(50);
+  }
 
   debug("review", `Codex path: sending /review command`);
   tmuxSendLiteral(activeSession, "/review");
