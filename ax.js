@@ -394,7 +394,7 @@ function tmuxPasteLiteral(session, text) {
   try {
     // Paste buffer into the session
     tmux(["paste-buffer", "-b", bufferName, "-t", session]);
-    // Ensure cursor is at end of pasted text
+    // Move cursor to end of pasted text
     tmux(["send-keys", "-t", session, "End"]);
   } finally {
     // Clean up the named buffer
@@ -404,6 +404,29 @@ function tmuxPasteLiteral(session, text) {
       debugError("tmuxPasteLiteral", err);
     }
   }
+}
+
+/**
+ * Paste text and send Enter, waiting for multiline paste indicator if needed.
+ * Claude Code shows "[Pasted text #N +M lines]" for multiline input and needs
+ * time to process it before accepting Enter.
+ * @param {string} session
+ * @param {string} text
+ */
+async function tmuxSendText(session, text) {
+  const parsed = parseSessionName(session);
+  const isClaude = parsed?.tool === "claude";
+  const newlineCount = (text.match(/\n/g) || []).length;
+
+  tmuxPasteLiteral(session, text);
+
+  // For multiline text in Claude, use adaptive delay based on paste size
+  if (isClaude && newlineCount > 0) {
+    const delay = Math.min(1500, 50 + 3 * text.length + 20 * newlineCount);
+    debug("sendText", `multiline paste (${text.length} chars, ${newlineCount} lines), waiting ${delay}ms`);
+    await sleep(delay);
+  }
+  tmuxSend(session, "Enter");
 }
 
 /**
@@ -3688,7 +3711,7 @@ const ClaudeAgent = new Agent({
   rateLimitPattern: /rate.?limit/i,
   // Claude uses whimsical verbs like "Wibbling…", "Dancing…", etc. Match any capitalized -ing word + ellipsis (… or ...)
   thinkingPatterns: ["Thinking", /[A-Z][a-z]+ing(…|\.\.\.)/],
-  activeWorkPatterns: ["[Pasted text", "esc to interrupt"],
+  activeWorkPatterns: ["esc to interrupt"],
   confirmPatterns: [
     "Do you want to make this edit",
     "Do you want to run this command",
@@ -5489,8 +5512,7 @@ async function cmdAsk(
     await sleep(50);
   }
 
-  tmuxPasteLiteral(activeSession, message);
-  tmuxSend(activeSession, "Enter");
+  await tmuxSendText(activeSession, message);
 
   if (noWait) {
     const parsed = parseSessionName(activeSession);
@@ -5538,7 +5560,7 @@ e.g.
 /**
  * @param {Agent} agent
  * @param {string} prompt
- * @param {{name?: string, maxLoops?: number, loop?: boolean, reset?: boolean, yolo?: boolean, timeoutMs?: number}} [options]
+ * @param {{name?: string, maxLoops?: number, loop?: boolean, reset?: boolean, session?: string | null, yolo?: boolean, timeoutMs?: number}} [options]
  */
 async function cmdDo(agent, prompt, options = {}) {
   const maxLoops = options.maxLoops || 10;
@@ -5554,8 +5576,17 @@ async function cmdDo(agent, prompt, options = {}) {
     writeFileSync(progressPath, "");
   }
 
-  // Start a new session for the do loop
-  let session = await cmdStart(agent, null, { yolo });
+  // Use provided session or start a new one
+  const session = options.session
+    ? await cmdStart(agent, options.session, { yolo })
+    : await cmdStart(agent, null, { yolo });
+
+  // Print session ID for targeting approvals when not in yolo mode
+  if (!yolo) {
+    const parsed = parseSessionName(session);
+    const shortId = parsed?.uuid?.slice(0, 8) || session;
+    console.error(`Session: ${shortId}`);
+  }
 
   const iterations = loop ? maxLoops : 1;
 
@@ -5570,9 +5601,8 @@ async function cmdDo(agent, prompt, options = {}) {
     // Build prompt with preamble + progress context
     const fullPrompt = buildDoPrompt(prompt, name);
 
-    // Send and wait
-    tmuxPasteLiteral(session, fullPrompt);
-    tmuxSend(session, "Enter");
+    // Send prompt and submit
+    await tmuxSendText(session, fullPrompt);
 
     const { state, screen } = yolo
       ? await autoApproveLoop(agent, session, timeoutMs, streamResponse)
@@ -5584,7 +5614,10 @@ async function cmdDo(agent, prompt, options = {}) {
     }
 
     if (state === State.CONFIRMING) {
+      const parsed = parseSessionName(session);
+      const shortId = parsed?.uuid?.slice(0, 8) || session;
       console.log(`\nAwaiting confirmation: ${formatConfirmationOutput(screen, agent)}`);
+      console.log(`Add --session=${shortId} if you have multiple sessions`);
       console.log("Use 'ax approve --wait' or 'ax reject' to continue");
       process.exit(3);
     }
@@ -6294,6 +6327,7 @@ async function main() {
       maxLoops: flags.maxLoops || 10,
       loop: flags.loop,
       reset: flags.reset,
+      session: flags.session ? session : null,
       yolo,
       timeoutMs,
     });
