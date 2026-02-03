@@ -6730,7 +6730,6 @@ async function main() {
       loop: flags.loop,
       reset: flags.reset,
       session: flags.session ? session : null,
-      yolo,
       timeoutMs,
     });
   }
