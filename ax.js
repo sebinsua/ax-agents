@@ -6536,7 +6536,7 @@ Recovery/State:
   log [SESSION]             View conversation log (--tail=N, --follow, --reasoning)
 
 Flags:
-  --tool=NAME               Use specific agent (codex, claude)
+  --tool=NAME               Select agent (aliases: axclaude, axcodex)
   --session=ID              name | archangel | uuid-prefix | self
   --fresh                   Reset conversation before review
   --yolo                    Skip all confirmations (dangerous)

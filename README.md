@@ -18,10 +18,12 @@ npm install -g ax-agents
 
 ```
 ax "what do you think of the error handling here?"
-ax review uncommitted
-ax --session=frontend "check the auth flow"
-ax --yolo "fix the login bug"
+axclaude review uncommitted
+axcodex --session=frontend "check the auth flow"
+ax do "fix the login bug" --loop
 ```
+
+Aliases `axclaude` and `axcodex` select the tool directly, or use `ax --tool=NAME`.
 
 Run `ax --help` for all options.
 
