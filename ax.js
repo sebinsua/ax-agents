@@ -5887,7 +5887,7 @@ async function cmdDo(agent, prompt, options = {}) {
   const name = options.name || "default";
   const loop = options.loop || false;
   const reset = options.reset || false;
-  const yolo = options.yolo || false;
+  const yolo = options.yolo ?? true;
   const timeoutMs = options.timeoutMs || DEFAULT_TIMEOUT_MS;
 
   // Reset progress file if requested
@@ -6507,8 +6507,8 @@ Usage: ${name} [OPTIONS] <command|message> [ARGS...]
 Messaging:
   <message>                 Send message to ${name}
   review [TYPE] [TARGET]    Review code: uncommitted, branch [base], commit [ref], custom
-  do <prompt>               Run one iteration (re-run to continue, exit 5 = more work)
-                            Options: --name=NAME, --loop, --max-loops=N, --reset, --yolo
+  do <prompt>               Run one iteration (auto-approves by default)
+                            Options: --name=NAME, --loop, --max-loops=N, --reset
 
 Sessions:
   compact                   Summarise session to shrink context size
