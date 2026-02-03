@@ -5577,9 +5577,17 @@ async function cmdDo(agent, prompt, options = {}) {
   }
 
   // Use provided session or start a new one
+  const sessionExists = options.session && tmuxHasSession(options.session);
   const session = options.session
     ? await cmdStart(agent, options.session, { yolo })
     : await cmdStart(agent, null, { yolo });
+
+  // If reusing existing session, wait for ready and clear stale input
+  if (sessionExists) {
+    await waitUntilReady(agent, session, timeoutMs);
+    tmuxSend(session, "C-u");
+    await sleep(50);
+  }
 
   // Print session ID for targeting approvals when not in yolo mode
   if (!yolo) {
