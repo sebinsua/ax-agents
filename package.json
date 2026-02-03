@@ -1,6 +1,6 @@
 {
   "name": "ax-agents",
-  "version": "0.1.9",
+  "version": "0.1.10",
   "description": "A CLI for orchestrating AI coding agents via tmux",
   "bin": {
     "ax": "ax.js",

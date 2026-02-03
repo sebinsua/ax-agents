@@ -308,7 +308,7 @@ ${progress || "(No progress yet)"}
 ## Your Task
 ${userPrompt}
 
-Remember: Work on ONE thing, update ${relProgressPath}, run tests, commit.
+Remember: Work on ONE thing, update ${relProgressPath}, then verify it works.
 When ALL tasks are complete, output <promise>COMPLETE</promise>`;
 }
 
@@ -639,7 +639,7 @@ const RFP_PREAMBLE = `## Guidelines
 // Note: DO_PREAMBLE is a template - {progressPath} gets replaced at runtime
 const DO_PREAMBLE = `You are an autonomous coding agent in a loop. Each iteration:
 
-1. Read {progressPath} to see what's done.
+1. Read {progressPath} to see what's done (empty means nothing done yet).
 2. Choose the next task:
   - Start with trivial/mechanistic work. It banks progress, builds context, and constrains nothing.
   - Then do foundational work that makes harder problems easier and safer to approach.
@@ -1428,17 +1428,17 @@ function formatClaudeLogEntry(entry) {
       const input = part.input || part.arguments || {};
       let summary;
       if (name === "Bash" && input.command) {
-        summary = input.command.slice(0, 50);
+        summary = truncate(input.command, 50);
       } else if (
         name === "Task" &&
         (input.description || input.subagent_type)
       ) {
         // Task tool: show description or subagent type
         summary = input.description || input.subagent_type || "";
-        summary = summary.slice(0, 40);
+        summary = truncate(summary, 40);
       } else {
         const target = input.file_path || input.path || input.pattern || "";
-        summary = target.split("/").pop() || target.slice(0, 30);
+        summary = target.split("/").pop() || truncate(target, 30);
       }
       output.push({ type: "tool", content: `> ${name}(${summary})` });
     }
@@ -1476,14 +1476,14 @@ function formatCodexLogEntry(entry) {
     try {
       const args = JSON.parse(entry.payload.arguments || "{}");
       if (name === "shell_command" && args.command) {
-        summary = args.command.slice(0, 50);
+        summary = truncate(args.command, 50);
       } else if (name === "Task" && (args.description || args.subagent_type)) {
         // Task tool: show description or subagent type
         summary = args.description || args.subagent_type || "";
-        summary = summary.slice(0, 40);
+        summary = truncate(summary, 40);
       } else {
         const target = args.file_path || args.path || args.pattern || "";
-        summary = target.split("/").pop() || target.slice(0, 30);
+        summary = target.split("/").pop() || truncate(target, 30);
       }
     } catch {
       summary = "...";
