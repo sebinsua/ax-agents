@@ -535,8 +535,9 @@ Some response from Codex
       const screen = `Previous output
 
 ❯ [Pasted text +500 lines]`;
-      // With activeWorkPatterns (claudeConfig has it), [Pasted text triggers THINKING
-      assert.strictEqual(detectState(screen, claudeConfig), State.THINKING);
+      // With activeWorkPattern matching [Pasted text, triggers THINKING
+      const configWithPastedText = { ...claudeConfig, activeWorkPatterns: ["[Pasted text"] };
+      assert.strictEqual(detectState(screen, configWithPastedText), State.THINKING);
       // Without activeWorkPatterns, prompt symbol causes READY
       const configNoActiveWork = { ...claudeConfig, activeWorkPatterns: [] };
       assert.strictEqual(detectState(screen, configNoActiveWork), State.READY);

@@ -1120,13 +1120,54 @@ function findNewestClaudeSessionUuid(sessionName) {
 }
 
 /**
+ * Find Codex log path by checking which .jsonl file the Codex process has open.
+ * Uses lsof as the source of truth - whatever file the process has open is the current log.
+ * Falls back to timestamp-based matching if lsof fails.
  * @param {string} sessionName
  * @returns {string | null}
  */
 function findCodexLogPath(sessionName) {
   debug("log", `findCodexLogPath: sessionName=${sessionName}`);
-  // For Codex, we need to match by timing since we can't control the session ID
-  // Get tmux session creation time
+
+  // Primary method: find the log file via lsof (what file does Codex have open?)
+  try {
+    // Get tmux pane PID
+    const paneResult = spawnSync(
+      "tmux",
+      ["list-panes", "-t", sessionName, "-F", "#{pane_pid}"],
+      { encoding: "utf-8" }
+    );
+    if (paneResult.status === 0 && paneResult.stdout.trim()) {
+      const panePid = parseInt(paneResult.stdout.trim().split("\n")[0], 10);
+      if (!isNaN(panePid)) {
+        // Find child process named "codex"
+        const pgrepResult = spawnSync("pgrep", ["-P", panePid.toString(), "-x", "codex"], {
+          encoding: "utf-8",
+        });
+        if (pgrepResult.status === 0 && pgrepResult.stdout.trim()) {
+          const codexPid = parseInt(pgrepResult.stdout.trim().split("\n")[0], 10);
+          if (!isNaN(codexPid)) {
+            // Use lsof to find which .jsonl file it has open
+            const lsofResult = spawnSync("lsof", ["-p", codexPid.toString()], {
+              encoding: "utf-8",
+            });
+            if (lsofResult.status === 0) {
+              const match = lsofResult.stdout.match(/(\S+\.jsonl)\s*$/m);
+              if (match) {
+                debug("log", `findCodexLogPath: lsof found ${match[1]}`);
+                return match[1];
+              }
+            }
+          }
+        }
+      }
+    }
+    debug("log", `findCodexLogPath: lsof method failed, falling back to timestamp`);
+  } catch (err) {
+    debug("log", `findCodexLogPath: lsof exception, falling back to timestamp`);
+  }
+
+  // Fallback: timestamp-based matching (for when process isn't running or lsof fails)
   try {
     const result = spawnSync(
       "tmux",
