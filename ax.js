@@ -9,6 +9,7 @@
 //   2 - rate limited
 //   3 - awaiting confirmation
 //   4 - thinking
+//   5 - iteration complete, more work to do (ax do)
 
 import { execSync, spawnSync, spawn } from "node:child_process";
 import {
@@ -266,6 +267,46 @@ const AI_DIR = path.join(PROJECT_ROOT, ".ai");
 const AGENTS_DIR = path.join(AI_DIR, "agents");
 const HOOKS_DIR = path.join(AI_DIR, "hooks");
 const RFP_DIR = path.join(AI_DIR, "rfps");
+const DO_DIR = path.join(AI_DIR, "do");
+
+/**
+ * Get path to progress file for a named do task
+ * @param {string} name - Task name (default: "default")
+ * @returns {string}
+ */
+function getDoProgressPath(name = "default") {
+  const dir = path.join(DO_DIR, name);
+  if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+  const filePath = path.join(dir, "progress.txt");
+  // Touch the file if it doesn't exist so agent can read it on first iteration
+  if (!existsSync(filePath)) writeFileSync(filePath, "");
+  return filePath;
+}
+
+/**
+ * Build prompt for do loop with preamble and progress context
+ * @param {string} userPrompt
+ * @param {string} name
+ * @returns {string}
+ */
+function buildDoPrompt(userPrompt, name) {
+  const progressPath = getDoProgressPath(name);
+  const progress = existsSync(progressPath) ? readFileSync(progressPath, "utf-8") : "";
+
+  const relProgressPath = `.ai/do/${name}/progress.txt`;
+  const preamble = DO_PREAMBLE.replace(/\{progressPath\}/g, relProgressPath);
+
+  return `${preamble}
+
+## Progress So Far
+${progress || "(No progress yet)"}
+
+## Your Task
+${userPrompt}
+
+Remember: Work on ONE thing, update ${relProgressPath}, run tests, commit.
+When ALL tasks are complete, output <promise>COMPLETE</promise>`;
+}
 
 // =============================================================================
 // Helpers - tmux
@@ -542,6 +583,24 @@ const RFP_PREAMBLE = `## Guidelines
 - Prioritize clarity over brevity.
 - If you have nothing to propose, respond with ONLY "EMPTY_RESPONSE".`;
 
+// Note: DO_PREAMBLE is a template - {progressPath} gets replaced at runtime
+const DO_PREAMBLE = `You are an autonomous coding agent in a loop. Each iteration:
+
+1. Read {progressPath} to see what's done
+2. Choose the highest priority remaining task
+3. Implement ONE small feature/fix
+4. Run feedback loops (tests, types, lint)
+5. Commit your changes with a clear message
+6. Append to {progressPath} what you did
+7. If ALL tasks are complete, output: <promise>COMPLETE</promise>
+
+Guidelines:
+- Work on ONE task per iteration, keep changes small
+- Always run tests before committing - do NOT commit if tests fail
+- Update {progressPath} BEFORE outputting COMPLETE
+- Prioritize risky/architectural work first
+- If stuck, document the blocker in {progressPath}`;
+
 /**
  * @param {string} session
  * @param {(screen: string) => boolean} predicate
@@ -705,6 +764,10 @@ async function readStdinIfNeeded(value) {
  * @property {string} [branch]
  * @property {string} [archangels]
  * @property {string} [autoApprove]
+ * @property {string} [name]
+ * @property {number} [maxLoops]
+ * @property {boolean} loop
+ * @property {boolean} reset
  */
 function parseCliArgs(args) {
   const { values, positionals } = parseArgs({
@@ -723,6 +786,8 @@ function parseCliArgs(args) {
       stale: { type: "boolean", default: false },
       version: { type: "boolean", short: "V", default: false },
       help: { type: "boolean", short: "h", default: false },
+      loop: { type: "boolean", default: false },
+      reset: { type: "boolean", default: false },
       // Value flags
       tool: { type: "string" },
       "auto-approve": { type: "string" },
@@ -732,6 +797,8 @@ function parseCliArgs(args) {
       limit: { type: "string" },
       branch: { type: "string" },
       archangels: { type: "string" },
+      name: { type: "string" },
+      "max-loops": { type: "string" },
     },
     allowPositionals: true,
     strict: false, // Don't error on unknown flags
@@ -759,6 +826,10 @@ function parseCliArgs(args) {
       branch: /** @type {string | undefined} */ (values.branch),
       archangels: /** @type {string | undefined} */ (values.archangels),
       autoApprove: /** @type {string | undefined} */ (values["auto-approve"]),
+      name: /** @type {string | undefined} */ (values.name),
+      maxLoops: values["max-loops"] !== undefined ? Number(values["max-loops"]) : undefined,
+      loop: Boolean(values.loop),
+      reset: Boolean(values.reset),
     },
     positionals,
   };
@@ -5466,6 +5537,81 @@ e.g.
 
 /**
  * @param {Agent} agent
+ * @param {string} prompt
+ * @param {{name?: string, maxLoops?: number, loop?: boolean, reset?: boolean, yolo?: boolean, timeoutMs?: number}} [options]
+ */
+async function cmdDo(agent, prompt, options = {}) {
+  const maxLoops = options.maxLoops || 10;
+  const name = options.name || "default";
+  const loop = options.loop || false;
+  const reset = options.reset || false;
+  const yolo = options.yolo || false;
+  const timeoutMs = options.timeoutMs || DEFAULT_TIMEOUT_MS;
+
+  // Reset progress file if requested
+  if (reset) {
+    const progressPath = getDoProgressPath(name);
+    writeFileSync(progressPath, "");
+  }
+
+  // Start a new session for the do loop
+  let session = await cmdStart(agent, null, { yolo });
+
+  const iterations = loop ? maxLoops : 1;
+
+  for (let i = 0; i < iterations; i++) {
+    // Fresh context (except first iteration)
+    if (i > 0) {
+      tmuxSendLiteral(session, "/new");
+      tmuxSend(session, "Enter");
+      await waitUntilReady(agent, session, timeoutMs);
+    }
+
+    // Build prompt with preamble + progress context
+    const fullPrompt = buildDoPrompt(prompt, name);
+
+    // Send and wait
+    tmuxPasteLiteral(session, fullPrompt);
+    tmuxSend(session, "Enter");
+
+    const { state, screen } = yolo
+      ? await autoApproveLoop(agent, session, timeoutMs, streamResponse)
+      : await streamResponse(agent, session, timeoutMs);
+
+    if (state === State.RATE_LIMITED) {
+      console.log(`\nRate limited: ${agent.parseRetryTime(screen)}`);
+      process.exit(2);
+    }
+
+    if (state === State.CONFIRMING) {
+      console.log(`\nAwaiting confirmation: ${formatConfirmationOutput(screen, agent)}`);
+      console.log("Use 'ax approve --wait' or 'ax reject' to continue");
+      process.exit(3);
+    }
+
+    const response = agent.getResponse(session, screen) || "";
+
+    // Check completion
+    if (response.includes("<promise>COMPLETE</promise>")) {
+      console.log(`\nCompleted after ${i + 1} iteration(s)`);
+      return;
+    }
+
+    // Single iteration mode (default): exit with code 5 to signal "more work"
+    if (!loop) {
+      console.log(`\nIteration complete. Re-run to continue, or --reset to start over.`);
+      process.exit(5);
+    }
+
+    console.log(`\n--- Iteration ${i + 1}/${maxLoops} complete ---`);
+  }
+
+  console.log(`\nReached max iterations (${maxLoops}) without completion`);
+  process.exit(1);
+}
+
+/**
+ * @param {Agent} agent
  * @param {string | null | undefined} session
  * @param {{wait?: boolean, timeoutMs?: number}} [options]
  */
@@ -5952,6 +6098,8 @@ Usage: ${name} [OPTIONS] <command|message> [ARGS...]
 Messaging:
   <message>                 Send message to ${name}
   review [TYPE] [TARGET]    Review code: uncommitted, branch [base], commit [ref], custom
+  do <prompt>               Run one iteration (re-run to continue, exit 5 = more work)
+                            Options: --name=NAME, --loop, --max-loops=N, --reset, --yolo
 
 Sessions:
   compact                   Summarise session to shrink context size
@@ -6133,6 +6281,22 @@ async function main() {
       process.exit(1);
     }
     return cmdRfp(prompt, { archangels: flags.archangels, fresh, noWait });
+  }
+  if (cmd === "do") {
+    const rawPrompt = positionals.slice(1).join(" ");
+    const prompt = await readStdinIfNeeded(rawPrompt);
+    if (!prompt) {
+      console.log("ERROR: no prompt provided");
+      process.exit(1);
+    }
+    return cmdDo(agent, prompt, {
+      name: flags.name || "default",
+      maxLoops: flags.maxLoops || 10,
+      loop: flags.loop,
+      reset: flags.reset,
+      yolo,
+      timeoutMs,
+    });
   }
   if (cmd === "approve") return cmdApprove(agent, session, { wait, timeoutMs });
   if (cmd === "reject") return cmdReject(agent, session, { wait, timeoutMs });
