@@ -1075,6 +1075,44 @@ function findClaudeLogPath(sessionId, sessionName) {
     return directPath;
   }
 
+  // Fallback: most recently modified session from index (handles /new creating new sessions)
+  if (existsSync(indexPath)) {
+    try {
+      const index = JSON.parse(readFileSync(indexPath, "utf-8"));
+      if (index.entries?.length) {
+        const sorted = [...index.entries].sort((a, b) => {
+          const aTime = a.modified ? new Date(a.modified).getTime() : 0;
+          const bTime = b.modified ? new Date(b.modified).getTime() : 0;
+          return bTime - aTime;
+        });
+        const newest = sorted[0];
+        if (newest?.fullPath && existsSync(newest.fullPath)) {
+          debug("log", `findClaudeLogPath: fallback to most recent via index -> ${newest.fullPath}`);
+          return newest.fullPath;
+        }
+      }
+    } catch (err) {
+      debugError("findClaudeLogPath:index-fallback", err);
+    }
+  }
+
+  // Final fallback: most recently modified .jsonl file (for projects without index)
+  try {
+    const files = readdirSync(claudeProjectDir)
+      .filter((f) => f.endsWith(".jsonl"))
+      .map((f) => {
+        const fullPath = path.join(claudeProjectDir, f);
+        return { path: fullPath, mtime: statSync(fullPath).mtimeMs };
+      })
+      .sort((a, b) => b.mtime - a.mtime);
+    if (files.length > 0) {
+      debug("log", `findClaudeLogPath: fallback to most recent file -> ${files[0].path}`);
+      return files[0].path;
+    }
+  } catch (err) {
+    debugError("findClaudeLogPath:file-fallback", err);
+  }
+
   debug("log", `findClaudeLogPath: not found`);
   return null;
 }
