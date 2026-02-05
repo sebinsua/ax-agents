@@ -6294,7 +6294,8 @@ async function cmdReview(
 
   if (!wait) return;
 
-  const useAutoApprove = yolo && !nativeYolo;
+  // Reviews should always auto-approve (unless session is already yolo)
+  const useAutoApprove = !nativeYolo;
 
   const { state, screen } = useAutoApprove
     ? await autoApproveLoop(agent, activeSession, timeoutMs, streamResponse)
