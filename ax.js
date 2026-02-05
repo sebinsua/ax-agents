@@ -6674,6 +6674,26 @@ async function main() {
   // Parse all flags and positionals in one place
   const { flags, positionals } = parseCliArgs(args);
 
+  // Support `ax codex "prompt"` and `ax claude "prompt"` as shorthand for --tool
+  if (
+    (positionals[0] === "codex" || positionals[0] === "claude") &&
+    !flags.tool
+  ) {
+    const tool = positionals.shift();
+    flags.tool = tool;
+    console.error(
+      styleText("yellow", `Hint: use 'ax${tool}' or 'ax --tool=${tool}' instead`)
+    );
+  }
+
+  // Skip "ask" if present (e.g., `ax ask "prompt"` or `ax codex ask "prompt"`)
+  if (positionals[0] === "ask" && positionals.length > 1) {
+    positionals.shift();
+    console.error(
+      styleText("yellow", `Hint: 'ask' is not needed, just use 'ax "prompt"'`)
+    );
+  }
+
   if (flags.version) {
     console.log(VERSION);
     process.exit(0);
