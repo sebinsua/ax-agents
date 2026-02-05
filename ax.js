@@ -3431,6 +3431,8 @@ function detectState(screen, config) {
   }
 
   debug("state", "no patterns matched -> STARTING");
+  debug("state", `lastLines:\n${lastLines}`);
+  debug("state", `recentLines:\n${recentLines}`);
   return State.STARTING;
 }
 
@@ -6395,7 +6397,12 @@ function cmdStatus(agent, session) {
     process.exit(4);
   }
 
-  // READY (or STARTING/UPDATE_PROMPT which are transient)
+  if (state === State.STARTING) {
+    console.log("STARTING");
+    process.exit(6);
+  }
+
+  // READY (or UPDATE_PROMPT which is transient)
   console.log("READY");
   process.exit(0);
 }
@@ -6606,7 +6613,7 @@ Archangels:
   rfp wait <id>             Wait for proposals (--archangels=a,b)
 
 Recovery/State:
-  status                    Exit code: ready=0 rate_limit=2 confirm=3 thinking=4
+  status                    Exit code: ready=0 rate_limit=2 confirm=3 thinking=4 starting=6
   output [-N]               Show response (0=last, -1=prev, -2=older)
   debug [SESSION]           Show raw screen output and detected state
   approve                   Approve pending action (send 'y')
